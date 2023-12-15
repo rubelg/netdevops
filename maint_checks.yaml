@@ -1,0 +1,184 @@
+---
+
+## Backup the config file -> add localhost to the hosts list on the run command
+- import_playbook: nfg-backup.yaml
+
+- name: Pre/Post Checks Playbook
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+#  serial: 1
+
+  vars:
+  
+    show_cmds:
+      - show bgp summary
+      - show isis adjacency
+      
+  vars_prompt:
+    - name: results_file
+      prompt: 'Enter file type "precheck" or "postcheck"'
+      private: no
+
+  tasks:
+    - name: Set the results_file variable
+      set_fact:
+        results_file: "{{ results_file }}"
+      
+    - name: Run show commands for bgp and isis status
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ show_cmds }}"
+      register: CLI_OUTPUT
+ 
+## Pass the output through python filters, IPV6 regex not working properly 
+    - name: Run bgp and isis filters
+      set_fact:
+        BGP_IPV4_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_bgp_neighbors }}"
+        BGP_IPV6_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_ipv6_bgp_neighbors }}"
+        ISIS_NEIGHBORS: "{{ CLI_OUTPUT.results[1].stdout | parse_isis_neighbors }}"
+   
+    - name: Save bgp summary results -> {{ inventory_hostname }}_{{ results_file }}.bgpsum
+      copy:
+        content: "{{ CLI_OUTPUT.results[0].stdout | to_nice_yaml }}"
+        dest: "{{ report_dir}}/{{ inventory_hostname }}_{{ results_file }}.bgpsum"    
+    
+    - name: Generate BGP/ISIS state report -> {{ inventory_hostname }}.neigh_state
+      template:
+        src: "./templates/bgp_report.j2"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}.neigh_state"
+      ignore_errors: yes
+  
+    - name: Cat {{ inventory_hostname }} BGP/ISIS state report
+      shell: "cat ./reports/{{ inventory_hostname }}_{{ results_file }}.neigh_state"
+      register: cat_jinja
+      ignore_errors: yes
+      
+    - set_fact:
+       state: "{{ cat_jinja.stdout | to_nice_yaml }}"
+       
+    - debug: var=state
+  
+    - name: Run show bgp neighbor | display json
+      junos_command:
+        commands:
+          - "show bgp neighbor"
+        display: json
+      register: result
+
+    - set_fact:
+        cli_json: "{{ result.stdout | from_yaml }}"
+
+## The tasks below are needed to create a valide json formatted file for ansible/jinja iterable data
+    - name: Regex replace '-' as jinja has issues with it
+      set_fact:
+        cli_json: "{{ cli_json | regex_replace('-','_') }}"
+        
+    - name: Regex remove 'master' line in the show output
+      set_fact:
+        cli_json: "{{ cli_json| regex_replace('{master}', '   ') }}"
+       
+    - name: Save register as json file
+      copy:
+        content: "{{ cli_json | to_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}.bgp_json"
+
+# Json file needs cleaned up to read in as true json format 
+    - name: Run sed on json file
+    # For interfaces use sed '1,2d'    
+      shell: sed '1d' ./reports/{{ inventory_hostname }}.bgp_json > ./reports/{{ inventory_hostname }}.json
+
+    - name: Read in the json file
+      set_fact:
+        #json_file: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json }}"
+        json_file: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json  }}"
+      register: result
+   
+    - set_fact:
+        json_data: "{{ result.ansible_facts }}"
+
+#    - debug: var=json_data
+
+    - name: Debug json_file
+      debug:
+        msg: "{{ json_file  }}"
+
+# Run jinja template on dictionary        
+    - name: Run jinja template on json_file -> {{ inventory_hostname }}.bgp_jinja
+      template:
+        src: "./templates/bgp_peer.j2"
+        dest: "./reports/{{ inventory_hostname }}.bgp_jinja"
+
+    - name: Cat jinja file
+      # shell: "cat ./reports/{{ inventory_hostname }}.jinja"
+      set_fact:
+        jinja: "{{ lookup('file', './reports/{{ inventory_hostname }}.bgp_jinja') }}"  
+      register: cat_jinja
+
+#    - debug:
+#        msg: "{{ jinja }}" 
+
+    - name: Save jinja bgp report to pre/postcheck file -> {{ inventory_hostname }}_{{ results_file }}.bgp_json
+      copy:
+        content: "{{ jinja | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}.bgp_json"
+    
+    - name: Read pre/postcheck bgp report file
+      set_fact: 
+        json2: "{{ lookup('file', './reports/{{ inventory_hostname }}_{{ results_file }}.bgp_json') | from_yaml }}"
+
+    - debug:
+        msg: "{{ json2 }}"
+
+#- import_playbook: interface-home.yaml
+#- import_playbook: interface-test.yaml
+- import_playbook: interface-prod.yaml
+
+- name: Run diff on Pre and Post ASI results files
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+  
+  tasks:
+  
+    - name: Check for precheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_precheck.bgp_json"
+      register: precheck
+  
+    - name: Check for postcheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.bgp_json"
+      register: postcheck
+      
+    - name: Diff pre/post asi for BGP/ISIS state
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.neigh_state"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.neigh_state"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists
+      
+    - name: Diff precheck/postcheck for BGP Summary Output
+      copy: 
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.bgpsum"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.bgpsum"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists
+
+    - name: Diff precheck/postcheck for BGP routing info
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.bgp_json"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.bgp_json"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists
+
+    - name: Diff precheck/postcheck for Interface state
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.intf_state"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.intf_state"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists

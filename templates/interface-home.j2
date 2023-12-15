@@ -1,0 +1,33 @@
+Interfaces on {{ inventory_hostname }}
+--------------------------------------
+{% for item in json_data.interface_information %}
+
+{% for p in item.physical_interface %}
+{% if p.description is defined %}
+{% for i in p.name %}
+{% for a in p.admin_status %}
+{% for o in p.oper_status %}
+Interface: {{ i.data }}		Admin Status: {{ a.data }}	Oper Status: {{ o.data }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% for l in item.physical_interface %}
+{% if l.logical_interface is defined %}
+{% for i in l.logical_interface %}
+{% if i.description is defined %}
+{% for n in i.name %}
+{% for a in l.admin_status %}
+{% for o in l.oper_status %}
+Interface: {{ n.data }}		Admin Status: {{ a.data }}	Oper Status: {{ o.data }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% endfor %}   

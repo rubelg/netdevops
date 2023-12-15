@@ -1,0 +1,65 @@
+---
+- name: Check ssh
+  hosts: 
+    - all
+  gather_facts: no
+  connection: network_cli
+  ignore_unreachable: true 
+#  ignore_errors: true
+
+  tasks:
+    - block:
+
+        - local_action:
+            module: wait_for host={{ansible_host}} port=22 delay=0 timeout=11
+
+        - name: Test for ssh access
+          wait_for_connection:
+            timeout: 11
+          vars:
+            ansible_connection: network_cli
+          register: sshcheck
+
+        - set_fact:
+            sshreach: SSH SUCCESS
+          when: sshcheck is success            
+          delegate_to: localhost
+
+        - name: Add device to group
+          group_by:
+            key: "running_hosts"
+          delegate_to: localhost
+
+        - set_fact:
+            ssh_fail: SSH FAILED
+          delegate_to: localhost
+#          when: sshcheck is failed
+
+#        - debug: var=ssh_fail
+#          when: ssh_fail is defined
+
+- name: Get version and uptime
+  hosts: running_hosts
+  gather_facts: no
+  connection: network_cli
+  ignore_unreachable: true
+  ignore_errors: true
+
+  tasks:
+    - name: Run show commands
+      cli_command:
+        command: "{{ item }}"
+      with_items: 
+        - 'show version | match Hostname:'
+        - 'show version | match Junos:'
+        - 'show system uptime'
+      register: show
+      when: sshreach is defined
+      no_log: true
+
+    - debug:
+        msg: "{{ show.results|map(attribute='stdout')| list }}"
+
+#    - debug: 
+#        msg: "{{ item }}"
+#      with_items: "{{ show.results | map(attribute='stdout') | join('\n')}}"
