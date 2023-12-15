@@ -1,0 +1,22 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+Hostname: {{ inventory_hostname }}
+----------------------------------
+{% for item in cli_json %}
+Neighbor:                  {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_address[0].data }}
+Peer AS:                   {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_as[0].data }}
+State:                     {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_state[0].data }}
+{% for index in range(item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib | length) %}
+Index: {{ index }}
+  Table:                     {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].name[0].data }}
+  Active Prefixes:           {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].active_prefix_count[0].data }}
+  Received Prefixes:         {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].received_prefix_count[0].data }}
+{% if item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].accepted_prefix_count[0] is defined %}
+  Accepted Prefixes:         {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].accepted_prefix_count[0].data }}
+{% endif %}
+{% if item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].advertised_prefix_count[0] is defined %}
+  Advertised Prefixes:       {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[index].advertised_prefix_count[0].data }}
+{% endif %}
+
+{% endfor %}
+{% endfor %}
