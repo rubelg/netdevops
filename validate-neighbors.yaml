@@ -1,0 +1,212 @@
+---
+- name: Validate the state of BGP/ISIS Neighbors
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+  serial: 1
+
+  vars_prompt:
+    - name: results_file
+      prompt: Enter results filename suffix - pre_asi/post_asi
+      private: no
+
+  vars:
+    show_cmds:
+      - show bgp summary
+      - show isis adjacency
+  tasks:
+         
+    - name: Run show commands
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ show_cmds }}"
+      register: CLI_OUTPUT
+
+        #    - debug: var=CLI_OUTPUT.results[0].stdout
+
+        #    - debug: var=CLI_OUTPUT.results[1].stdout
+
+    - name: Run bgp and isis filters
+      set_fact:
+        BGP_IPV4_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_bgp_neighbors }}"
+        BGP_IPV6_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_ipv6_bgp_neighbors }}"
+        ISIS_NEIGHBORS: "{{ CLI_OUTPUT.results[1].stdout | parse_isis_neighbors }}"
+
+#    - debug: var=BGP_IPV4_NEIGHBORS
+    
+#    - debug: var=BGP_IPV6_NEIGHBORS
+
+#    - debug: var=ISIS_NEIGHBORS
+    
+    - name: Generate BGP/ISIS state report -> {{ inventory_hostname }}_{{ results_file }}_validate_state.txt
+      template:
+        src: "./templates/bgp_report.j2"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}_validate_state.txt"
+
+    - name: "Validate ISIS Neighbors"
+      assert:
+        quiet: True
+          #        that: "OSPF_NEIGHBORS | length == 2"
+        that: item.State == 'Up'
+        success_msg: |-
+          Neighbor {{ item.Neighbor }} is in UP state
+        fail_msg: |-
+          Neighbor {{ item.Neighbor }} in State {{ item.State }}
+      loop: "{{ ISIS_NEIGHBORS }}"
+      loop_control:
+        label: "Interface: {{ item.Interface }}, State: {{ item.State }}"
+
+    - name: "Establisthed IPv4 BGP Peers"
+      assert:
+        quiet: True
+        # Ensure that the state is not active or idle. If it is established 
+        # the number of routes received.
+        #that: (item.State |lower != 'Connect') or (item.State | lower != 'Idle') or (item.State | lower != 'Active')
+        that: 
+          - "item.State != 'Active'"
+          - "item.State != 'Idle'"
+          - "item.State != 'Connect'"                          
+        fail_msg:
+            Neighbor {{ item.Peer }} is not established!
+      # This is the magic that causes the assert to run for each element
+      # in the array.
+      loop: "{{ BGP_IPV4_NEIGHBORS }}"
+      loop_control:
+        # Create a label to output for each element in the array. Without
+        # this the full object gets printed out.
+        label: "Peer: {{ item.Peer }}, AS Number: {{ item.AS }}"
+      ignore_errors: true
+      delegate_to: localhost
+
+    - set_fact:
+        bgp_peers: []
+
+    - name: Set BGP Peers
+      set_fact:
+        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
+      with_items: "{{ BGP_IPV4_NEIGHBORS }}"
+      when: item.State == 'Establ'
+      no_log: true
+      delegate_to: localhost
+      
+    - name: Add IPV6 BGP Peers
+      set_fact:
+        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
+      with_items: "{{ BGP_IPV6_NEIGHBORS }}"
+      when: item.State == 'Establ'
+      no_log: true
+      delegate_to: localhost
+
+    - debug: var=bgp_peers
+
+    - name: Get prefixes advertised to BGP Peers 
+      cli_command:
+        command: "show route advertising-protocol bgp {{ item }}"
+       # command:  "show route advertising-protocol bgp {{ item.Peer }}"
+       #  loop: "{{ BGP_IPV4_NEIGHBORS }}"
+      with_items: "{{ bgp_peers }}"
+      register: bgp_routes
+#      when:
+#        - item.State == 'Establ'
+
+#    - debug: 
+#        msg:
+#          - "'Prefixes from peers='{{ bgp_routes.results | map(attribute='item.Peer') | join('\n') }}"
+#         - "{{ bgp_routes | map(attribute='stdout_lines') | join('\n') }}"
+      
+    - debug:
+        msg:
+#          - "{{bgp_routes.results[0].stdout | to_nice_yaml }}"i
+#           - "{{ item }} | to_nice_yaml }}"
+          - "{{ item.stdout | to_nice_yaml }}"
+      loop: "{{ bgp_routes.results }}"
+# Use with ipv4 bgp peers
+      loop_control:
+#        label: "{{ item.item.Peer }}"
+        label: "{{ item.item }}"
+      when: item.stdout is defined and item.stdout | length > 0
+      delegate_to: localhost
+
+    - set_fact:
+        readout: "{{ bgp_routes.results | to_nice_yaml }}"
+      delegate_to: localhost
+       
+    - name: Save bgp results to file -> {{ inventory_hostname }}_{{ results_file }}_advroutes.txt
+      lineinfile:
+        path: "{{report_dir}}/{{ inventory_hostname }}_{{ results_file }}_advroutes.txt"
+#        line: "Prefixes sent to BGP Peer {{ item.item.Peer }}\n{{ item.stdout }}"
+        line: "Prefixes sent to BGP Peer {{ item.item }}\n{{ item.stdout }}\n"
+        create: true
+      loop: "{{ bgp_routes.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+# Use with ipv4 only
+#      loop: "{{ bgp_routes.results }}"
+#      loop_control:
+#        label: "{{ item.item }}"
+      when: item.stdout is defined
+      delegate_to: localhost
+
+    - name: Get prefixes received from BGP Peers 
+      cli_command:
+        command: "show route receive-protocol bgp {{ item }}"
+       # command:  "show route advertising-protocol bgp {{ item.Peer }}"
+       #  loop: "{{ BGP_IPV4_NEIGHBORS }}"
+      with_items: "{{ bgp_peers }}"
+      register: bgp_rec_routes
+ 
+    - name: Debug received bgp routes  
+      debug:
+        msg:
+          - "{{ item.stdout | to_nice_yaml }}"
+      loop: "{{ bgp_rec_routes.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout is defined and item.stdout | length > 0
+      delegate_to: localhost
+      
+    - name: Save bgp received routes results to file -> {{ inventory_hostname }}_{{ results_file }}_recroutes.txt
+      lineinfile:
+        path: "{{report_dir}}/{{ inventory_hostname }}_{{ results_file }}_recroutes.txt"
+        line: "Prefixes sent to BGP Peer {{ item.item }}\n{{ item.stdout }}\n"
+        create: true
+      loop: "{{ bgp_rec_routes.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout is defined
+      delegate_to: localhost
+      
+    - name: Check for pre_asi files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_advroutes.txt"
+      register: pre_asi
+
+    - name: Check for post_asi files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_advroutes.txt"
+      register: post_asi
+
+    - name: Diff pre_asi/post_asi advertised routes
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_advroutes.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_advroutes.txt"
+      check_mode: yes
+      diff: yes
+      when: pre_asi.stat.exists and post_asi.stat.exists
+      
+    - name: Diff pre_asi/post_asi received routes
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_recroutes.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_recroutes.txt"
+      check_mode: yes
+      diff: yes
+      when: pre_asi.stat.exists and post_asi.stat.exists  
+
+    - name: Diff BGP/ISIS State
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_validate_state.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_validate_state.txt"
+      check_mode: yes
+      diff: yes
+      when: pre_asi.stat.exists and post_asi.stat.exists
+    
