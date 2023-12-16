@@ -1,0 +1,70 @@
+---
+- name: Apply configuration to device
+  hosts: 
+    - all
+  gather_facts: no
+  connection: network_cli
+
+  vars:
+    config_dir: "~/ansible-confgen/config_files"
+
+    config_cmds:
+      - "configure"
+      - "activate system radius-server"
+      - "set system authentication-order radius"
+      - "show | display set | match -order"
+      - "show | compare"
+      - 'commit confirmed 8 comment "Activate Radius"'
+      - 'exit c'
+
+    final_commit:
+      - configure
+      - commit
+      - exit
+    
+    rollback_cmds:
+      - configure
+      - rollback 
+      - commit and-quit
+
+  tasks:
+    
+    - name: Load Radius config
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ config_cmds }}"
+      register: config
+#      ignore_errors: yes
+
+    - debug:
+        var: config.results
+
+    - name: Pause to check Radius Manually
+      pause:
+        minutes: 1
+
+    - name: Final Commit
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ final_commit }}"
+      register: final_commit
+
+    - debug:
+        var: final_commit.results
+
+    - name: Backup new conifg
+      cli_command:
+        command: "show configuration | display set"
+      register: radius_config
+
+    - lineinfile: dest="{{ commit_dir }}/{{ inventory_hostname }}.radius-commit" line={{ item }} create=yes state=present
+      with_items:
+        - "{{ radius_config.stdout }}"
+ 
+    - name: Diff config
+      copy:
+        src: "{{ commit_dir }}/{{ inventory_hostname }}.radius-commit"
+        dest: "{{ commit_dir }}/{{ inventory_hostname }}.post-commit"
+      check_mode: yes
+      diff: yes
+      tags: diff

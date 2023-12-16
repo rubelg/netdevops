@@ -1,0 +1,136 @@
+---
+- name: Apply configuration to device
+  hosts: 
+    - all
+  gather_facts: no
+  connection: network_cli
+
+  vars:
+    config_dir: "~/ansible-confgen/config_files"
+    ansible_ssh_user: 
+
+    config_cmds:
+      - "configure"
+      - "load set {{ inventory_hostname }}-full_cfg.set"
+      - "commit check"
+      - "exit c"
+
+    commit_cmds:
+      - 'configure'
+      - 'commit confirmed 19 '
+      - 'exit'
+    
+    rollback_cmds:
+      - configure
+      - rollback 
+      - commit and-quit
+
+  tasks:
+    
+    - name: Scp config file to device
+      shell: "sshpass -p {{ ansible_password }} scp -o StrictHostKeyChecking=no {{ config_dir }}/{{inventory_hostname}}/{{ inventory_hostname }}-full_cfg.set {{ ansible_ssh_user}}@{{ ansible_host }}:"
+      delegate_to: localhost
+      register: scp
+      retries: 2
+
+  
+    - name: Verify config file on device
+      cli_command:
+        command: "{{ item }}"
+      loop:
+        - file list detail
+        - file checksum md5 {{ inventory_hostname }}-full_cfg.set
+      register: file_list
+
+    - debug: msg="{{ file_list.results | map(attribute='stdout') | join('\n')}}"
+
+    - name: Find old commit files
+      find:
+        paths: "{{ commit_dir }}"
+        file_type: file
+        patterns: '{{ inventory_hostname }}*'
+      register: old_commits
+
+    - name: Delete old commit files
+      become: yes
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ old_commits.files }}"
+
+    - name: Backup running config
+      cli_command: 
+        command: "show configuration | display set"
+      register: pre_config
+
+    - lineinfile: dest="{{ commit_dir }}/{{ inventory_hostname }}.pre-commit" line={{ item }} create=yes state=present
+      with_items:
+         - "{{ pre_config.stdout }}"
+
+
+    - name: Delete current config
+      cli_command:
+        command: '{{ item }}'
+        prompt:
+          - "This will delete the entire configuration"
+          - "Delete everything under this level? [yes,no] (no)"
+        answer:
+          - "yes"
+      loop:
+        - configure
+        - delete
+        - exit c
+      register: delete
+
+#    - name: Pause
+#      pause:
+#        seconds: 5
+
+    - name: Load new config
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ config_cmds }}"
+      register: config
+#      ignore_errors: yes
+
+    - debug: var=config 
+
+    - name: Commit if "load set" succeeds
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ commit_cmds }}"
+      register: commit
+      when: config.results[2].failed == false
+
+    - debug:
+        var: commit
+
+    - name: Rollback if "load set" fails
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ rollback_cmds }}"
+      register: rollback
+      when: config.results[2].failed == true
+
+    - name: Backup new conifg
+      cli_command:
+        command: "show configuration | display set"
+      register: post_config
+
+    - lineinfile: dest="{{ commit_dir }}/{{ inventory_hostname }}.post-commit" line={{ item }} create=yes state=present
+      with_items:
+        - "{{ post_config.stdout }}"
+ 
+    - name: Diff config
+      copy:
+        src: "{{ commit_dir }}/{{ inventory_hostname }}.post-commit"
+        dest: "{{ commit_dir }}/{{ inventory_hostname }}.pre-commit"
+      check_mode: yes
+      diff: yes
+      tags: diff
+
+    - name: Pause to check access
+      pause:
+        minutes: 2
+
+- import_playbook: radius.yml
