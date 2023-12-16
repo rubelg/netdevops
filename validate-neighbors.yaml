@@ -7,7 +7,7 @@
 
   vars_prompt:
     - name: results_file
-      prompt: Enter results filename suffix - pre_asi/post_asi
+      prompt: Enter results filename suffix - precheck or postcheck
       private: no
 
   vars:
