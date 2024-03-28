@@ -1,0 +1,126 @@
+---
+
+- name: Run show commands
+  hosts: all
+  gather_facts: no
+  connection: network_cli
+  become: no
+
+#  vars_prompt:
+#    - name: "ansible_user"
+#      prompt: "Username:"
+#      private: no
+#      unsafe: yes
+
+#    - name: "ansible_password"
+#      prompt: "Token Code:"
+#      private: yes
+#      unsafe: yes
+
+  pre_tasks:
+
+    - name: Get current time
+      shell: 'date +"%T_%m-%d-%Y"'
+      register: time
+      run_once: true
+  
+    - set_fact:
+        timestamp: "{{ time.stdout }}"
+      run_once: true
+
+    - debug: var=timestamp
+      run_once: true
+       
+  vars_prompt:
+    - name: "filename"
+      prompt: "Enter (1) for precheck (2) for postcheck"
+      private: no
+
+  vars:
+    ansible_command_timeout: 10
+
+    showcmds:
+      - "show version"
+      - "show interface description"
+      - "show chassis alarms"
+      - "show system alarms"
+      - "show system uptime"
+      - "show chassis hardware"
+      - "show bgp sum"
+      - "show isis adjacency"
+      - "show route summary"
+      - "show configuration | display set | save /var/tmp/{{inventory_hostname}}_{{results_file}}.cfg"
+
+  tasks:
+
+    - set_fact:
+        results_file: "precheck"
+      when: filename == '1'
+   
+    - set_fact:
+        results_file: "postcheck"
+      when: filename == '2'
+ 
+    - name: Set report directory path
+      set_fact:
+        report_dir: "{{ user_data_path }}/reports"
+
+    - name: Build report directory
+      set_fact:
+        build_dir: "{{ report_dir }}/build"
+ 
+    - name: Confirm report directory
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+
+    - name: Find old reports
+      find:
+        path: "{{ report_dir }}"
+        file_type: file
+        patterns: '{{ inventory_hostname }}-*check*'
+      register: old_reports
+
+    - name: Delete old reports
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ old_reports.files }}"
+      when: filename == '1'
+
+    - name: Run Show commands
+      cli_command:
+        command: "{{ item }}"
+      run_once: yes
+      with_items: "{{ showcmds }}"
+      register: output
+      ignore_errors: yes
+
+    - debug:
+        var: output
+
+    - name: Save Output 
+      lineinfile:
+        path: "{{ report_dir }}/{{ inventory_hostname }}-{{results_file}}.txt"
+        line: "{{ item.stdout }}"
+        create: yes
+      loop: "{{output.results}}"
+      no_log: True
+      ignore_errors: yes
+
+    - name: Check for precheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}-precheck.txt"
+      register: precheck
+
+#    - debug:
+#        msg: "{{ output.results|map(attribute='stdout')| list }}"
+
+    - name: Diff Pre and Post Shows
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}-{{results_file}}.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}-precheck.txt"
+      check_mode: yes
+      diff: yes
+      tags: diff
+      when: precheck.stat.exists
