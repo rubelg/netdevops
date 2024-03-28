@@ -22,14 +22,12 @@
     - name: Get current time
       shell: 'date +"%T_%m-%d-%Y"'
       register: time
-      run_once: true
+      delegate_to: localhost
   
     - set_fact:
         timestamp: "{{ time.stdout }}"
-      run_once: true
 
     - debug: var=timestamp
-      run_once: true
        
   vars_prompt:
     - name: "filename"
@@ -56,10 +54,12 @@
     - set_fact:
         results_file: "precheck"
       when: filename == '1'
+      delegate_to: localhost
    
     - set_fact:
         results_file: "postcheck"
       when: filename == '2'
+      delegate_to: localhost
  
     - name: Set report directory path
       set_fact:
@@ -91,7 +91,6 @@
     - name: Run Show commands
       cli_command:
         command: "{{ item }}"
-      run_once: yes
       with_items: "{{ showcmds }}"
       register: output
       ignore_errors: yes
@@ -113,8 +112,15 @@
         path: "{{ report_dir }}/{{ inventory_hostname }}-precheck.txt"
       register: precheck
 
-#    - debug:
-#        msg: "{{ output.results|map(attribute='stdout')| list }}"
+    - name: Diff Pre and Post config
+      cli_command:
+        command: 'file compare files /var/tmp/{{inventory_hostname}}_precheck.cfg /var/tmp/{{inventory_hostname}}_postcheck.cfg'
+      register: config_diff
+      when: precheck.stat.exists
+
+    - name: Debug Pre and Post configs
+      debug:
+        msg: "{{ config_diff.stdout }}"
 
     - name: Diff Pre and Post Shows
       copy:
@@ -124,3 +130,12 @@
       diff: yes
       tags: diff
       when: precheck.stat.exists
+
+    - pause:
+        prompt: "Enter to continue and delete host config files, cntrl-c to Abort"
+      when: filename == '2'
+
+    - name: Delete old configs
+      cli_command:
+        command: 'file delete /var/tmp/{{inventory_hostname}}_*.cfg'
+      when: filename == '2'
