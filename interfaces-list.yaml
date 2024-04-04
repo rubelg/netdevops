@@ -1,0 +1,102 @@
+---
+- name: Gather interface information
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+
+  vars:
+    
+    show_cmds:
+      - show interfaces
+
+  tasks:
+    - name: Run 'show interfaces'
+      junos_command:
+        commands:  
+          - "show interfaces"
+        display: json
+      register: intf
+
+    - set_fact:
+        cli_json: "{{ intf.stdout| regex_replace('{master}', '   ')| regex_replace('-','_')}}"
+
+    - name: Save interface data to file
+      copy:
+        content: "{{ cli_json | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}_intf.json"
+      delegate_to: localhost
+
+    - name: Run sed on file to clean up bad lines
+      shell: sed -i '1d' ./reports/{{ inventory_hostname }}_intf.json
+      delegate_to: localhost
+      no_log: true
+
+    - name: Read in cleaned up json data
+      set_fact:
+        json_data: "{{ lookup('file', './reports/{{ inventory_hostname }}_intf.json') | from_json }}"
+      register: result
+      delegate_to: localhost
+      no_log: true
+
+#    - debug: 
+#        msg: "{{ json_data }}"
+        
+#    - copy:
+#        content: "{{ json_data }}"
+#        dest: "./reports/{{ inventory_hostname }}_intf-list.dict"
+
+## The tasks below run inline jinja to match on interfaces with a description configured
+    - name: Put all logical interfaces in a variable
+      set_fact:
+        logical_interfaces: |
+            {% for l in item.physical_interface -%}
+            {% if l.logical_interface is defined -%}
+            {% for i in l.logical_interface -%}
+            {% if i.description is defined -%}
+            {% for n in i.name -%}
+            {% for a in l.admin_status -%}
+            {% for o in l.oper_status -%}
+            {{ n.data }}        admin_status: {{ a.data }}  oper_status: {{ o.data }}
+            {% endfor -%}
+            {% endfor -%}
+            {% endfor -%}
+            {% endif -%}
+            {% endfor -%}
+            {% endif -%}
+            {% endfor -%}
+      loop: "{{ json_data.interface_information }}"
+      loop_control:
+        label: "{{ item }}"
+      register: result
+      no_log: true
+   
+    - name: Put Physical Interfaces with description into variable
+      set_fact:
+        physical_interfaces: |
+          {% for p in item.physical_interface %}
+          {% if p.description is defined %}
+          {% for i in p.name %}
+          {% for a in p.admin_status %}
+          {% for o in p.oper_status %}
+          {{ i.data }}      Admin Status: {{ a.data }}  Oper Status: {{ o.data }}
+          {% endfor %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+      loop: "{{ json_data.interface_information }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+ 
+    - debug: var=physical_interfaces
+
+    - debug: var=logical_interfaces
+
+    - set_fact:
+        intf_state: "{{ physical_interfaces + logical_interfaces }}"  
+
+    - name: Save interface state info to {{ inventory_hostname }}_{{results_file}}.intf_state
+      copy:
+        content: "{{ intf_state | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}.intf_state"

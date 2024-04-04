@@ -1,0 +1,155 @@
+---
+
+- import_playbook: asi-checks.yaml
+
+- name: Gather bgp neighbor information
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+
+  vars:
+    show_cmds:
+      - show bgp summary
+      - show isis adjacency
+
+  tasks:
+  
+    - debug: var=results_file
+    
+    - name: Run show commands for bgp and isis status
+      cli_command:
+        command: "{{ item }}"
+      with_items: "{{ show_cmds }}"
+      register: CLI_OUTPUT
+ 
+## Pass the output through python filters, IPV6 regex not working properly 
+    - name: Run bgp and isis filters
+      set_fact:
+        BGP_IPV4_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_bgp_neighbors }}"
+        BGP_IPV6_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_ipv6_bgp_neighbors }}"
+        ISIS_NEIGHBORS: "{{ CLI_OUTPUT.results[1].stdout | parse_isis_neighbors }}"
+    
+    - name: Save bgp summary results -> {{ inventory_hostname }}_{{ results_file }}.bgpsum
+      copy:
+        content: "{{ CLI_OUTPUT.results[0].stdout | to_nice_yaml }}"
+        dest: "{{ report_dir}}/{{ inventory_hostname }}_{{ results_file }}.bgpsum"    
+    
+    - name: Generate BGP/ISIS state report -> {{ inventory_hostname }}.{{ results_file }}.report
+      template:
+        src: "./templates/bgp_report.j2"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}.report"
+      ignore_errors: yes
+    
+    - name: Cat {{ inventory_hostname }} BGP/ISIS state report
+      shell: "cat ./reports/{{ inventory_hostname }}_{{ results_file }}.report"
+      register: cat_jinja
+      ignore_errors: yes
+      
+    - set_fact:
+        report: "{{ cat_jinja.stdout | to_nice_yaml }}"
+       
+    - debug: var=report
+    
+    - name: Run 'show bgp neighbor'
+      junos_command:
+        commands:  
+          - "show bgp neighbor"
+        display: json
+      register: intf
+
+    - set_fact:
+        cli_json: "{{ intf.stdout| regex_replace('{master}', '   ')| regex_replace('-','_')}}"
+
+    - name: Save interface data to file
+      copy:
+        content: "{{ cli_json | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}_bgp.json"
+      delegate_to: localhost
+
+    - name: Run sed on file to clean up bad lines
+      shell: sed -i '1d' ./reports/{{ inventory_hostname }}_bgp.json
+      delegate_to: localhost
+      no_log: true
+
+    - name: Read in cleaned up json data
+      set_fact:
+        json_file: "{{ lookup('file', './reports/{{ inventory_hostname }}_bgp.json') | from_json }}"
+      register: result
+      delegate_to: localhost
+      no_log: true
+
+    - debug: 
+        msg: "{{ json_file | type_debug }}"
+        
+     # Run jinja template on dictionary
+    - name: Run jinja template on json_file -> {{ inventory_hostname }}_{{results_file}}.bgp_peers
+      template:
+        src: "./templates/bgp_peer.j2"
+        dest: "./reports/{{ inventory_hostname }}_{{results_file}}.bgp_peers"
+
+    - name: Cat jinja file
+      # shell: "cat ./reports/{{ inventory_hostname }}.jinja"
+      set_fact:
+        jinja: "{{ lookup('file', './reports/{{ inventory_hostname }}_{{results_file}}.bgp_peers') }}"
+      register: cat_jinja
+
+    - debug:
+        msg: "{{ cat_jinja }}"    
+
+## The tasks below run inline jinja to match on interfaces with a description configured
+    - name: Put bgp info into variable
+      set_fact:
+        bgp_neigh: |
+          {% for item in json_file.bgp_information %}
+          {% for p in item.bgp_peer %}
+          =============================     
+          {% for a in p.peer_address %}
+            peer_address: {{ a.data }}
+          {% endfor %}
+          {% for b in p.peer_state %}
+            peer_state: {{ b.data }}
+          {% endfor %}
+          {% for as in p.peer_as %}
+            peer_as: {{ as.data }}
+          {% endfor -%}
+          {% if p.bgp_rib is defined -%}
+            {% for c in p.bgp_rib -%}
+            {% for d in c.name -%}
+            table: {{ d.data }}
+            {% endfor -%}
+            {% for d in c.received_prefix_count -%}
+            received_prefixes: {{ d.data }}
+            {% endfor -%}
+            {% if c.accepted_prefix_count is defined -%}
+            {% for d in c.accepted_prefix_count -%}
+            accepted_prefixes: {{ d.data }}
+            {% endfor -%}
+            {% endif -%}
+            {% for d in c.active_prefix_count -%}
+            active_prefixes: {{ d.data }}
+            {% endfor -%}
+            {% if c.advertised_prefix_count is defined -%}
+            {% for d in c.advertised_prefix_count -%}
+            advertised_prefixes: {{ d.data }}
+            {% endfor -%}
+            {% endif -%}
+
+
+            {% endfor %}
+          {% endif %}            
+          {% endfor %}
+          {% endfor %}
+  
+      register: result
+      no_log: true
+
+#    - debug: var=result
+   
+    - name: Save bgp table info to {{ inventory_hostname }}_bgp_neigh.state
+      copy:
+        content: "{{ bgp_neigh | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}_bgp_neigh.state"
+
+- import_playbook: interfaces-list.yaml
+
+- import_playbook: postcheck-diff.yaml

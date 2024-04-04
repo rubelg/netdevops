@@ -1,0 +1,49 @@
+---
+- name: Diff pre and postcheck files
+  hosts: all
+  gather_facts: no
+  connection: local
+  
+  tasks:
+    - name: Check for precheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_precheck.txt"
+      register: precheck
+    
+    - name: Check for postcheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.txt"
+      register: postcheck
+      
+    - name: Diff Pre and postcheck show commands
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.txt"
+      check_mode: yes
+      diff: yes
+      tags: diff
+      when: precheck.stat.exists and postcheck.stat.exists
+
+    - name: Diff pre and postcheck for BGP/ISIS state report
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.report"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.report"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists
+
+    - name: Diff pre and postcheck for BGP peer info
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.bgp_peers"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.bgp_peers"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists
+      
+    - name: Diff pre_asi/post_asi for Interface state
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.intf_state"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.intf_state"
+      check_mode: yes
+      diff: yes
+      when: precheck.stat.exists and postcheck.stat.exists
