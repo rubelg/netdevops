@@ -1,0 +1,196 @@
+---
+- name: Build configs to reroute NFG prefix to Test IAP
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+
+  vars:
+    iap_31: uigwcol010
+    iap_41: uigwsna010
+    iap_51: uigwrob010
+    iaps: 
+      - '31'
+      - '41'
+      - '51'
+    iap_rtrs:
+      - "{{ iap_31 }}"
+      - "{{ iap_41 }}"
+      - "{{ iap_51 }}"
+    iap_id:
+      - host: uigwcol010
+        id: 31
+      - host: uigwsna010
+        id: 41
+      - host: uigwrob010
+        id: 51 
+  
+  vars_prompt:
+    - name: reroute_tag
+      prompt: Enter IAP# to reroute traffic to (31,41, etc)
+      private: no
+
+    - name: nfg_prefix
+      prompt: Enter NFG prefix to reroute with mask
+      private: no
+
+  tasks:
+
+    - set_fact:
+        new_iap_tag: "GW_{{ reroute_tag }}" 
+
+    - set_fact:
+        new_iap_name: "{{ lookup('vars', 'iap_' ~ reroute_tag) }}"
+      run_once: true
+
+    - debug:
+        msg: "Traffic will be sent to {{ new_iap_name }}"
+      run_once: true
+
+    - debug:
+        msg: |
+          PREFIX LIST to generate if NFG route passes validation!
+
+          set prefix-list {{ new_iap_tag }}-NFG-TESTING {{ nfg_prefix }}
+      run_once: true
+
+
+#### Following tasks generate dynamic configs to change scu/dcu filter on the fly #####
+
+    - name: Generate SCU/DCU firewall filter config for ae200/210 test IAP - {{ new_iap_name }}
+      template:
+        src: "./templates/nfg_reroute_new_iap.j2"
+        dest: "./reports/{{new_iap_name}}_config.set"
+      run_once: true
+      tags: never
+
+    - debug:
+        msg: |
+          set prefix-list-{{ item }}
+      loop: "{{ iaps }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item != reroute_tag 
+      run_once: true
+      tags: never
+
+    - name: Generate SCU/DCU firewall filter config for IAPs to send traffic to {{ new_iap_name }}
+      template:
+        src: "./templates/nfg_reroute_other_iap.j2"
+        dest: "./reports/{{ item }}_config.set"
+      loop: "{{ iap_rtrs }}"
+      loop_control:
+        label: "{{ item }}"
+      run_once: true
+      tags: never 
+      
+#### End dynamic scu/dcu filter generations ####
+
+    - name: Generate SCU/DCU firewall filter config files for each IAP
+      template:
+        src: "./templates/nfg_reroute_scu_filter.j2"
+        dest: "./reports/{{ item[0] }}_config.set"
+      with_nested:
+        - "{{ iap_rtrs }}"
+        - "{{ iaps }}"
+      run_once: true
+      tags: scu, never
+
+    - name: Verify NFG prefix
+      junos_command:
+        commands:
+          - "show route {{ nfg_prefix }} detail"
+        display: json
+      register: results
+
+    - set_fact:
+        prefix_json: "{{ results.stdout | from_yaml | list }}"
+
+    - name: Create jinja iterable data
+      set_fact:
+        prefix_json: "{{ prefix_json | regex_replace('{master}', '  ')| regex_replace('-','_') | trim }}"
+      register: result
+      delegate_to: localhost
+
+    - name: Create list
+      set_fact:
+        prefix_json: "{{ prefix_json | list }}"
+
+    - name: Save prefix data to file
+      copy:
+        content: "{{ prefix_json | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}.json"
+
+    - name: Run sed on data file
+      shell: sed -i '1d' ./reports/{{ inventory_hostname }}.json
+      delegate_to: localhost
+      
+    - name: Read in file
+      set_fact:
+        prefix_data: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json }}"
+      register: results
+
+    - name: Find prefix community
+      set_fact:
+        bgp_comm: |
+          {% for p in item.route_table %}
+          {% if p.rt is defined %}
+          {% for d in p.rt %}
+          {% if d.rt_entry is defined %}
+          {% for c in d.rt_entry %}
+          {% if c.communities is defined %}
+          {% for cc in c.communities %}
+          {% for d in cc.community %}
+            {% if d.data == '568:568' %}
+            {{ d.data }}
+            {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+      loop: "{{ prefix_data.route_information }}"
+      loop_control: 
+        label: "{{ item }}"
+      register: result
+      ignore_errors: true
+      no_log: true
+
+    - set_fact:
+        nfg_tag: "{{ result.results | map(attribute='ansible_facts.bgp_comm') | list }}"
+    
+    - debug: var=nfg_tag
+
+    - debug:
+        msg: |
+          set prefix-list-GW{{ reroute_tag }}-FOR-NFG-TESTING {{ nfg_prefix }}
+#      loop: "{{ iaps }}"
+#      loop_control:
+#        label: "{{ item }}"
+      when: nfg_tag is search("568:568")
+      register: config_set
+      no_log: true
+
+    - debug:
+        msg: |
+           Prefix contains NFG community !!
+           Generating configs for reroute to {{ new_iap_tag }} !!
+      when: not config_set.skipped | default(false)
+      run_once: true
+      ignore_errors: true    
+
+    - name: Generate IAP configs
+      template:
+        src: "./templates/nfg_reroute_prefix.j2"
+        dest: "./reports/{{ item }}_pl_config.set"
+      loop: "{{ iap_rtrs }}"
+      loop_control:
+        label: "{{ item }}"
+      when: nfg_tag is search("568:568") 
+ 
+    - debug:
+        msg: "Prefix does not contain NFG community"
+      when: config_set.skipped | default(false) 
+
