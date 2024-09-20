@@ -1,4 +1,0 @@
-#jinja2: lstrip_blocks: "True", trim_blocks: "True"
-
-set policy-options prefix-list GW{{reroute_tag}}-FOR-NFG-TESTING {{ nfg_prefix }}
-set firewall family inet PACKET-FORWARDING-SCU-FILTER term TO-GW{{reroute_tag}}-FOR-NFG-TESTING from prefix-list GW{{reroute_tag}}-FOR-NFG-TESTING
