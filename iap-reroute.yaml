@@ -42,7 +42,7 @@
   tasks:
 
     - set_fact:
-        new_iap_tag: "GW_{{ reroute_tag }}" 
+        new_iap_tag: "GW{{ reroute_tag }}" 
 
     - set_fact:
         new_iap_name: "{{ lookup('vars', 'iap_' ~ reroute_tag) }}"
@@ -94,7 +94,7 @@
     - name: Generate SCU/DCU firewall filter config files for each IAP
       template:
         src: "./templates/iap_reroute_scu_filter.j2"
-        dest: "./reports/{{ item[0] }}_config.set"
+        dest: "./config_files/{{ item[0] }}_config.set"
       with_nested:
         - "{{ iap_rtrs }}"
         - "{{ iaps }}"
@@ -190,7 +190,7 @@
     - name: Generate IAP configs
       template:
         src: "./templates/iap_reroute_prefix.j2"
-        dest: "./reports/{{ item }}_pl_config.set"
+        dest: "./config_files/{{ item }}_config.set"
       loop: "{{ iap_rtrs }}"
       loop_control:
         label: "{{ item }}"
