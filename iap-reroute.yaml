@@ -5,32 +5,38 @@
   gather_facts: no
 
   vars:
-    iap_31: uigwcol010
-    iap_41: uigwsna010
-    iap_51: uigwrob010
+    iap_31: vmx1
+    iap_41: vmx2
+    iap_51: vmx3
+    iap_61: vmx4
     iaps: 
       - '31'
       - '41'
       - '51'
+      - '61'
     iap_rtrs:
       - "{{ iap_31 }}"
       - "{{ iap_41 }}"
       - "{{ iap_51 }}"
+      - "{{ iap_61 }}"
     iap_id:
-      - host: uigwcol010
+      - host: vmx1
         id: 31
-      - host: uigwsna010
+      - host: vmx2
         id: 41
-      - host: uigwrob010
+      - host: vmx3
         id: 51 
+      - host: vmx4
+        id: 61
   
   vars_prompt:
     - name: reroute_tag
       prompt: Enter IAP# to reroute traffic to (31,41, etc)
       private: no
+      
 
-    - name: nfg_prefix
-      prompt: Enter NFG prefix to reroute with mask
+    - name: iap_prefix
+      prompt: Enter prefix to reroute with mask
       private: no
 
   tasks:
@@ -48,9 +54,9 @@
 
     - debug:
         msg: |
-          PREFIX LIST to generate if NFG route passes validation!
+          PREFIX LIST to generate if IAP route passes validation!
 
-          set prefix-list {{ new_iap_tag }}-NFG-TESTING {{ nfg_prefix }}
+          set prefix-list {{ new_iap_tag }}-IAP-TESTING {{ iap_prefix }}
       run_once: true
 
 
@@ -87,7 +93,7 @@
 
     - name: Generate SCU/DCU firewall filter config files for each IAP
       template:
-        src: "./templates/nfg_reroute_scu_filter.j2"
+        src: "./templates/iap_reroute_scu_filter.j2"
         dest: "./reports/{{ item[0] }}_config.set"
       with_nested:
         - "{{ iap_rtrs }}"
@@ -95,10 +101,10 @@
       run_once: true
       tags: scu, never
 
-    - name: Verify NFG prefix
+    - name: Verify IAP prefix
       junos_command:
         commands:
-          - "show route {{ nfg_prefix }} detail"
+          - "show route {{ iap_prefix }} detail"
         display: json
       register: results
 
@@ -140,7 +146,7 @@
           {% if c.communities is defined %}
           {% for cc in c.communities %}
           {% for d in cc.community %}
-            {% if d.data == '568:568' %}
+            {% if d.data == '68:68' %}
             {{ d.data }}
             {% endif %}
           {% endfor %}
@@ -165,17 +171,17 @@
 
     - debug:
         msg: |
-          set prefix-list-GW{{ reroute_tag }}-FOR-NFG-TESTING {{ nfg_prefix }}
+          set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ iap_prefix }}
 #      loop: "{{ iaps }}"
 #      loop_control:
 #        label: "{{ item }}"
-      when: nfg_tag is search("568:568")
+      when: nfg_tag is search("68:68")
       register: config_set
       no_log: true
 
     - debug:
         msg: |
-           Prefix contains NFG community !!
+           Prefix contains valid IAP community !!
            Generating configs for reroute to {{ new_iap_tag }} !!
       when: not config_set.skipped | default(false)
       run_once: true
@@ -183,14 +189,14 @@
 
     - name: Generate IAP configs
       template:
-        src: "./templates/nfg_reroute_prefix.j2"
+        src: "./templates/iap_reroute_prefix.j2"
         dest: "./reports/{{ item }}_pl_config.set"
       loop: "{{ iap_rtrs }}"
       loop_control:
         label: "{{ item }}"
-      when: nfg_tag is search("568:568") 
+      when: nfg_tag is search("68:68") 
  
     - debug:
-        msg: "Prefix does not contain NFG community"
+        msg: "Prefix does not contain a valid IAP community"
       when: config_set.skipped | default(false) 
 
