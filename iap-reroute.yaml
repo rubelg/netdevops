@@ -21,13 +21,13 @@
       - "{{ iap_61 }}"
     iap_id:
       - host: vmx1
-        id: 31
+        id: '31'
       - host: vmx2
-        id: 41
+        id: '41'
       - host: vmx3
-        id: 51 
+        id: '51' 
       - host: vmx4
-        id: 61
+        id: '61'
   
   vars_prompt:
     - name: reroute_tag
@@ -42,12 +42,12 @@
   tasks:
 
     - set_fact:
-        new_iap_tag: "GW{{ reroute_tag }}" 
-
+        new_iap_tag: "GW{{ reroute_tag }}"
+     
     - set_fact:
         new_iap_name: "{{ lookup('vars', 'iap_' ~ reroute_tag) }}"
       run_once: true
-
+    
     - debug:
         msg: "Traffic will be sent to {{ new_iap_name }}"
       run_once: true
@@ -67,28 +67,29 @@
         src: "./templates/nfg_reroute_new_iap.j2"
         dest: "./reports/{{new_iap_name}}_config.set"
       run_once: true
-      tags: never
+      tags: never, dynamic
 
     - debug:
         msg: |
-          set prefix-list-{{ item }}
+          set prefix-list-GW{{ item }}
       loop: "{{ iaps }}"
       loop_control:
         label: "{{ item }}"
-      when: item != reroute_tag 
+      when: item == reroute_tag 
       run_once: true
-      tags: never
+      tags: never, dynamic
 
     - name: Generate SCU/DCU firewall filter config for IAPs to send traffic to {{ new_iap_name }}
       template:
         src: "./templates/nfg_reroute_other_iap.j2"
-        dest: "./reports/{{ item }}_config.set"
-      loop: "{{ iap_rtrs }}"
+        dest: "./reports/{{ item.host }}_config.set"
+      loop: "{{ iap_id }}"
       loop_control:
         label: "{{ item }}"
+      when: item.id != reroute_tag
       run_once: true
-      tags: never 
-      
+      tags: never, dynamic
+  
 #### End dynamic scu/dcu filter generations ####
 
     - name: Generate SCU/DCU firewall filter config files for each IAP

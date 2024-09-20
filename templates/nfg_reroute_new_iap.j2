@@ -1,5 +1,6 @@
 #jinja2: lstrip_blocks: "True", trim_blocks: "True"
 
-set policy-options prefix-list GW{{reroute_tag}}-FOR-NFG-TESTING {{ nfg_prefix }}
-set firewall family inet PACKET-FORWARDING-SCU-FILTER term GW{{reroute_tag}}-SOURCE-FROM-NFG-AFTER-INSPECTION from source-prefix-list GW{{reroute_tag}}-FOR-NFG-TESTING
-set firewall family inet PACKET-FORWARDING-SCU-FILTER term GW{{reroute_tag}}-SOURCE-FROM-NFG-AFTER-INSPECTION from interface ae1.200
+
+set policy-options prefix-list GW{{reroute_tag}}-FOR-NFG-TESTING {{ iap_prefix }}
+set firewall family inet filter PACKET-FORWARDING-SCU-FILTER term GW{{reroute_tag}}-SOURCE-FROM-NFG-AFTER-INSPECTION from source-prefix-list GW{{reroute_tag}}-FOR-NFG-TESTING
+set firewall family inet filter PACKET-FORWARDING-SCU-FILTER term GW{{reroute_tag}}-SOURCE-FROM-NFG-AFTER-INSPECTION from interface ae1.200
