@@ -1,0 +1,224 @@
+---
+- name: Build configs to reroute NFG prefix to Test IAP
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+
+  vars:
+    iap_31: vmx1
+    iap_41: vmx2
+    iap_51: vmx3
+    iap_61: vmx4
+    iaps: 
+      - '31'
+      - '41'
+      - '51'
+      - '61'
+    iap_rtrs:
+      - "{{ iap_31 }}"
+      - "{{ iap_41 }}"
+      - "{{ iap_51 }}"
+      - "{{ iap_61 }}"
+    iap_id:
+      - host: vmx1
+        id: '31'
+      - host: vmx2
+        id: '41'
+      - host: vmx3
+        id: '51' 
+      - host: vmx4
+        id: '61'
+  
+  vars_prompt:
+    - name: reroute_tag
+      prompt: Enter IAP# to reroute traffic to (31,41, etc)
+      private: no
+      
+
+    - name: iap_prefix
+      prompt: Enter prefix to reroute with mask
+      private: no
+
+  tasks:
+
+    - name: Set list of prefixes
+      set_fact:
+        prefixes:  "{{ iap_prefix.split(',') }}"
+      delegate_to: localhost
+      run_once: true
+ 
+    - set_fact:
+        new_iap_tag: "GW{{ reroute_tag }}"
+     
+    - set_fact:
+        new_iap_name: "{{ lookup('vars', 'iap_' ~ reroute_tag) }}"
+      run_once: true
+    
+    - debug:
+        msg: "Traffic will be sent to {{ new_iap_name }}"
+      run_once: true
+
+    - debug:
+        msg: |
+          PREFIX LIST to generate if IAP route passes validation!
+
+          set prefix-list {{ new_iap_tag }}-IAP-TESTING {{ item }}
+      loop: "{{ prefixes }}"
+      run_once: true
+
+
+#### Following tasks generate dynamic configs to change scu/dcu filter on the fly #####
+
+    - name: Generate SCU/DCU firewall filter config for ae200/210 test IAP - {{ new_iap_name }}
+      template:
+        src: "./templates/nfg_reroute_new_iap.j2"
+        dest: "./reports/{{new_iap_name}}_config.set"
+      run_once: true
+      tags: never, dynamic
+
+    - debug:
+        msg: |
+          set prefix-list-GW{{ item }}
+      loop: "{{ iaps }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item == reroute_tag 
+      run_once: true
+      tags: never, dynamic
+
+    - name: Generate SCU/DCU firewall filter config for IAPs to send traffic to {{ new_iap_name }}
+      template:
+        src: "./templates/nfg_reroute_other_iap.j2"
+        dest: "./reports/{{ item.host }}_config.set"
+      loop: "{{ iap_id }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item.id != reroute_tag
+      run_once: true
+      tags: never, dynamic
+  
+#### End dynamic scu/dcu filter generations ####
+
+    - name: Generate SCU/DCU firewall filter config files for each IAP
+      template:
+        src: "./templates/iap_reroute_scu_filter.j2"
+        dest: "./config_files/{{ item[0] }}_config.set"
+      with_nested:
+        - "{{ iap_rtrs }}"
+        - "{{ iaps }}"
+      run_once: true
+      tags: scu, never
+
+    - name: Verify IAP prefix
+      junos_command:
+        commands:
+          - "show route {{ item }} detail"
+        display: json
+      loop: "{{ prefixes }}"
+      register: show_cmds
+
+    - set_fact:
+        prefix_json: "{{ show_cmds.results | map(attribute='stdout') | from_yaml | list }}"
+
+
+    - name: Create jinja iterable data
+      set_fact:
+        prefix_json: "{{ prefix_json | regex_replace('{master}', '  ')| regex_replace('-','_') | trim }}"
+      register: result
+      delegate_to: localhost
+    
+    - set_fact:
+        prefix_json: "{{ result.ansible_facts.prefix_json }}"
+   
+    - name: Save prefix data to file
+      copy:
+        content: "{{ prefix_json | to_nice_yaml | to_json }}"
+        dest: "./reports/{{ inventory_hostname }}.json"
+
+    - name: Run sed on data file
+      shell: sed -i '/ |-/d' ./reports/{{ inventory_hostname }}.json
+      delegate_to: localhost
+      tags: never
+       
+    - name: Read in file
+      set_fact:
+        prefix_data: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json }}"
+      register: results
+    
+    - set_fact:
+  
+    - name: Find prefix community
+      set_fact:
+        bgp_comm: |
+          {% for p in item.route_table %}
+          {% if p.rt is defined %}
+          {% for d in p.rt %}
+          {% if d.rt_destination is defined %}
+          {% for l in d.rt_destination %}
+          - prefix: {{ l.data }}
+          {% endfor %}
+          {% endif %}
+          {% if d.rt_entry is defined %}
+          {% for c in d.rt_entry %}
+          {% if c.communities is defined %}
+          {% for cc in c.communities %}
+          {% for d in cc.community %}
+          {% if d.data == '68:68' %}
+          comms: {{ d.data }}
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+         
+      loop: "{{ prefix_data.route_information }}"
+      loop_control: 
+        label: "{{ item }}"
+      register: result
+      ignore_errors: true
+      
+    - set_fact:
+        nfg_tag: "{{ result.results | map(attribute='ansible_facts.bgp_comm') | list }}"
+
+    - name: Set bgp_prefix
+      set_fact:
+        bgp_prefix: "{{ item }}"
+      loop: "{{ nfg_tag }}"
+
+    - debug: var=bgp_prefix
+
+    - debug:
+        msg: |
+          set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ iap_prefix }}
+#      loop: "{{ iaps }}"
+#      loop_control:
+#        label: "{{ item }}"
+      when: nfg_tag is search("68:68")
+      register: config_set
+      no_log: true
+
+    - debug:
+        msg: |
+           Prefix contains valid IAP community !!
+           Generating configs for reroute to {{ new_iap_tag }} !!
+      when: not config_set.skipped | default(false)
+      run_once: true
+      ignore_errors: true    
+
+    - name: Generate IAP configs
+      template:
+        src: "./templates/iap_reroute_prefix.j2"
+        dest: "./config_files/{{ item }}_config.set"
+      loop: "{{ iap_rtrs }}"
+      loop_control:
+        label: "{{ item }}"
+      when: nfg_tag is search("68:68") 
+ 
+    - debug:
+        msg: "Prefix does not contain a valid IAP community"
+      when: config_set.skipped | default(false) 
+

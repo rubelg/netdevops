@@ -1,0 +1,56 @@
+---
+
+#- import_playbook: ssh.yml
+
+- name: Apply Config Changes
+  hosts: all
+  gather_facts: no
+  connection: network_cli
+  serial: 1
+
+  vars_prompt:
+    
+    - name: comments
+      prompt: Enter string for commit comments
+      private: no      
+      
+    - name: Userid
+      prompt: "Enter Username "
+      private: no
+    - name: Password
+      prompt: "Enter Password "
+      private: yes      
+  
+  vars:
+    config_dir: "{{ user_data_path }}/config_files"
+    backup_dir: "{{ user_data_path }}/backups"
+    config_file: "{{ inventory_hostname }}_config.set"
+    ansible_user: "{{ Userid }}"
+    ansible_password: "{{ Password }}"
+  
+  tasks:
+    
+    - name: Read contents of configuration change file -> {{ inventory_hostname }}_config.set
+      shell: cat {{ config_dir }}/{{ config_file }}
+      register: conf_lines
+      check_mode: no
+    
+    - debug:
+        var: "{{ item }}"
+      with_items: conf_lines.stdout
+
+    - pause:
+        seconds: 5
+
+    - name: Apply configuration change to device
+      cli_config:
+        config: "{{ lookup('file', '{{ config_dir }}/{{ config_file }}') }}"
+        backup: no
+#        backup_options:
+#          filename: "{{ inventory_hostname }}_precheck.cfg"
+#          dir_path: "{{ backup_dir }}"
+        commit_comment: '"{{ comments }}"'
+      register: change
+   
+    - debug: var=change
+
