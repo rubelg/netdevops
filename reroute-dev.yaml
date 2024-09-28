@@ -109,6 +109,7 @@
       run_once: true
       tags: scu, never
 
+#### Validate community on prefixes ####
     - name: Verify IAP prefix
       junos_command:
         commands:
@@ -117,22 +118,41 @@
       loop: "{{ prefixes }}"
       register: show_cmds
 
+    # Each show command returns a list, show_cmds.results is a dictionary
     - set_fact:
-        prefix_json: "{{ show_cmds.results | map(attribute='stdout') | from_yaml | list }}"
+        cli_json: "{{ show_cmds.results | map(attribute='stdout') | from_yaml | list }}"
 
-
-    - name: Create jinja iterable data
+    - name: Clean up {master} line
       set_fact:
-        prefix_json: "{{ prefix_json | regex_replace('{master}', '  ')| regex_replace('-','_') | trim }}"
+        cli_json: "{{ cli_json | regex_replace('{master}','') }}"
+
+    - name: Regex replace dash for list using loop
+      set_fact:
+        cli_json: "{{ item|regex_replace('-', '_') }}"
+      with_items: "{{ cli_json }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
       register: result
-      delegate_to: localhost
+
+    - name: Create cleaned up cli_json list variable
+      set_fact:
+        cli_json: "{{ result.results | map(attribute='ansible_facts') | list }}"
+      no_log: true
+
+    - name: Create flat prefix_data variable
+      set_fact:
+        prefix_data: "{{ item.cli_json.route_information }}"
+      loop: "{{ cli_json| flatten(levels=5) }}"
+      register: flat
+      no_log: true
     
-    - set_fact:
-        prefix_json: "{{ result.ansible_facts.prefix_json }}"
-   
-    - name: Save prefix data to file
+    - debug: 
+        msg: "{{ flat.results }}"
+
+    - name: Save cli_json to file
       copy:
-        content: "{{ prefix_json | to_nice_yaml | to_json }}"
+        content: "{{ cli_json }}"
         dest: "./reports/{{ inventory_hostname }}.json"
 
     - name: Run sed on data file
@@ -140,64 +160,50 @@
       delegate_to: localhost
       tags: never
        
-    - name: Read in file
+    - name: Read in file and return a list
       set_fact:
         prefix_data: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json }}"
       register: results
     
-    - set_fact:
-  
-    - name: Find prefix community
+    - name: Set prefix and community variable
       set_fact:
-        bgp_comm: |
-          {% for p in item.route_table %}
-          {% if p.rt is defined %}
-          {% for d in p.rt %}
-          {% if d.rt_destination is defined %}
-          {% for l in d.rt_destination %}
-          - prefix: {{ l.data }}
-          {% endfor %}
-          {% endif %}
-          {% if d.rt_entry is defined %}
-          {% for c in d.rt_entry %}
-          {% if c.communities is defined %}
-          {% for cc in c.communities %}
-          {% for d in cc.community %}
-          {% if d.data == '68:68' %}
-          comms: {{ d.data }}
-          {% endif %}
-          {% endfor %}
-          {% endfor %}
-          {% endif %}
-          {% endfor %}
-          {% endif %}
-          {% endfor %}
-          {% endif %}
-          {% endfor %}
-         
-      loop: "{{ prefix_data.route_information }}"
-      loop_control: 
-        label: "{{ item }}"
-      register: result
-      ignore_errors: true
-      
-    - set_fact:
-        nfg_tag: "{{ result.results | map(attribute='ansible_facts.bgp_comm') | list }}"
+        test: |
+          Prefix: "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }}"
+            Comms: "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
+      loop: "{{ prefix_data }}"
+      register: p_data
+      no_log: true
+  
 
+    - set_fact: 
+        nfg_tag: "{{ p_data.results | map(attribute='ansible_facts.test') | list }}"
+      
     - name: Set bgp_prefix
       set_fact:
         bgp_prefix: "{{ item }}"
       loop: "{{ nfg_tag }}"
+      loop_control:
+        label: "{{ item }}"
+      when: nfg_tag is search("68:68")
+      register: valid_prefix
 
-    - debug: var=bgp_prefix
+    - debug:
+        msg: "{{ bgp_prefix }}"
+   
+    - name: Set valid_prefix from bgp_prefix results
+      set_fact: 
+        valid_prefix: "{{ valid_prefix.results | map(attribute='ansible_facts') | list }}"
+     
+
+    - debug: var=valid_prefix
 
     - debug:
         msg: |
           set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ iap_prefix }}
-#      loop: "{{ iaps }}"
+      loop: "{{ iaps }}"
 #      loop_control:
 #        label: "{{ item }}"
-      when: nfg_tag is search("68:68")
+      when: valid_prefix is search("68:68")
       register: config_set
       no_log: true
 
@@ -216,7 +222,7 @@
       loop: "{{ iap_rtrs }}"
       loop_control:
         label: "{{ item }}"
-      when: nfg_tag is search("68:68") 
+      when: valid_prefix is search("68:68") 
  
     - debug:
         msg: "Prefix does not contain a valid IAP community"
