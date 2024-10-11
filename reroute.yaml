@@ -1,0 +1,248 @@
+---
+- name: Build configs to reroute NFG prefix to Test IAP
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+
+  vars:
+    iap_31: vmx1
+    iap_41: vmx2
+    iap_51: vmx3
+    iap_61: vmx4
+    iaps: 
+      - '31'
+      - '41'
+      - '51'
+      - '61'
+    iap_rtrs:
+      - "{{ iap_31 }}"
+      - "{{ iap_41 }}"
+      - "{{ iap_51 }}"
+      - "{{ iap_61 }}"
+    iap_id:
+      - host: vmx1
+        id: '31'
+      - host: vmx2
+        id: '41'
+      - host: vmx3
+        id: '51' 
+      - host: vmx4
+        id: '61'
+  
+  vars_prompt:
+    - name: reroute_tag
+      prompt: Enter IAP# to reroute traffic to (31,41, etc)
+      private: no
+      
+
+    - name: iap_prefix
+      prompt: Enter prefix to reroute with mask
+      private: no
+
+  tasks:
+
+    - name: Set list of prefixes
+      set_fact:
+        prefixes:  "{{ iap_prefix.split(',') }}"
+      delegate_to: localhost
+      run_once: true
+ 
+    - set_fact:
+        new_iap_tag: "GW{{ reroute_tag }}"
+     
+    - set_fact:
+        new_iap_name: "{{ lookup('vars', 'iap_' ~ reroute_tag) }}"
+      run_once: true
+    
+    - debug:
+        msg: "Traffic will be sent to {{ new_iap_name }}"
+      run_once: true
+
+    - debug:
+        msg: |
+          PREFIX LIST to generate if IAP route passes validation!
+
+          set prefix-list {{ new_iap_tag }}-IAP-TESTING {{ item }}
+      loop: "{{ prefixes }}"
+      run_once: true
+
+
+#### Following tasks generate dynamic configs to change scu/dcu filter on the fly #####
+
+    - name: Generate SCU/DCU firewall filter config for ae200/210 test IAP - {{ new_iap_name }}
+      template:
+        src: "./templates/nfg_reroute_new_iap.j2"
+        dest: "./reports/{{new_iap_name}}_config.set"
+      run_once: true
+      tags: never, dynamic
+
+    - debug:
+        msg: |
+          set prefix-list-GW{{ item }}
+      loop: "{{ iaps }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item == reroute_tag 
+      run_once: true
+      tags: never, dynamic
+
+    - name: Generate SCU/DCU firewall filter config for IAPs to send traffic to {{ new_iap_name }}
+      template:
+        src: "./templates/nfg_reroute_other_iap.j2"
+        dest: "./reports/{{ item.host }}_config.set"
+      loop: "{{ iap_id }}"
+      loop_control:
+        label: "{{ item }}"
+      when: item.id != reroute_tag
+      run_once: true
+      tags: never, dynamic
+  
+#### End dynamic scu/dcu filter generations ####
+
+    - name: Generate SCU/DCU firewall filter config files for each IAP
+      template:
+        src: "./templates/iap_reroute_scu_filter.j2"
+        dest: "./config_files/{{ item[0] }}_config.set"
+      with_nested:
+        - "{{ iap_rtrs }}"
+        - "{{ iaps }}"
+      run_once: true
+      tags: scu, never
+
+#### Validate community on prefixes ####
+    - name: Verify IAP prefix
+      junos_command:
+        commands:
+          - "show route {{ item }} detail"
+        display: json
+      loop: "{{ prefixes }}"
+      register: show_cmds
+
+    # Each show command returns a list, show_cmds.results is a dictionary
+    - set_fact:
+        cli_json: "{{ show_cmds.results | map(attribute='stdout') | from_yaml | list }}"
+
+    - name: Clean up {master} line
+      set_fact:
+        cli_json: "{{ cli_json | regex_replace('{master}','') }}"
+
+    - name: Regex replace dash for list using loop
+      set_fact:
+        cli_json: "{{ item|regex_replace('-', '_') }}"
+      with_items: "{{ cli_json }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+      register: result
+
+    - name: Create cleaned up cli_json list variable
+      set_fact:
+        cli_json: "{{ result.results | map(attribute='ansible_facts') | list }}"
+      no_log: true
+
+    - name: Create List of prefixes with NFG Communities
+      set_fact:
+        p_valid: "{{ p_valid|default([]) + [item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data + '/' + item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data]  }}"
+  #/[item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data] }}"
+  #        "comm": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
+      loop: "{{ cli_json | flatten }}"
+      when: 
+        - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] is search('68:68')
+ #       - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] | length > 0
+      register: config_set
+      ignore_errors: true
+      no_log: true
+     
+#### For Reference Only #####
+    - name: Weed out invalid p_data
+      set_fact:
+        p_valid: "{{ p_valid | default([]) + [item.Prefix] }}"
+      loop: "{{ p_data.comm }}"
+      when: item is search("68:68")
+      register: valid_result
+      tags: never
+
+    - debug:
+        msg: |
+          "These are valid NFG prefixes!"
+          "{{ item }}"
+      loop: "{{ p_valid }}"
+      when: p_valid is defined
+      register: config_set
+
+    - debug:
+        msg: |
+          "No valid NFG communities found"
+      when: config_set.skipped | default(false)
+
+    - debug:
+        msg: |
+          "set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ item }}"
+      loop: "{{ p_valid }}"
+      register: config_set
+      when: p_valid is defined
+  
+    - name: Generate IAP configs
+      template:
+        src: "./templates/iap_reroute_prefix.j2"
+        dest: "./config_files/{{ item }}_config.set"
+      loop: "{{ iap_rtrs }}"
+      loop_control:
+        label: "{{ item }}"
+      when: p_valid is defined
+  
+    - pause: 
+        seconds: 5
+   
+    - name: Create flat prefix_data variable
+      set_fact:
+        prefix_data: "{{ item.cli_json.route_information }}"
+      loop: "{{ cli_json| flatten(levels=5) }}"
+      register: flat
+      tags: never
+    
+    - name: Save cli_json to file
+      copy:
+        content: "{{ cli_json }}"
+        dest: "./reports/{{ inventory_hostname }}.json"
+    
+    - name: Run sed on data file
+      shell: sed -i '/ |-/d' ./reports/{{ inventory_hostname }}.json
+      delegate_to: localhost
+       
+    - name: Read in file and return a list
+      set_fact:
+        prefix_data: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json }}"
+      register: results
+
+    - name: Set prefix and community variable
+      set_fact:
+        prefix: "{{ prefix | default([]) + [{ 'Prefix' : item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }] + [{ 'comms' : item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities }] }}"
+   #     "Prefix": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }}"
+   #     "comms": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
+      loop: "{{ prefix_data }}"
+      register: p_data
+      tags: never
+
+    - name: Create a list non nfg prefixes
+      set_fact:
+        nfg_tag: "{{ nfg_tag | default([]) + [{ 'Prefix': item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data, 'comms': item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }] }}"
+      loop: "{{ prefix_data }}"
+      when: not (item is search("68:68"))
+      register: non_nfg
+      ignore_errors: true
+   
+
+    - debug:
+        msg: |
+          Prefix does not contain a valid NFG community
+          {% for Prefix in nfg_tag %}
+          {{ loop.index }} is {{ Prefix }}
+          {% endfor %}
+      when: non_nfg.skipped | default (false)
+      register: config_set
+ 
+    - debug:
+        msg: "Prefix does not contain a valid IAP community"
+      when: not (config_set.skipped | default(false)) 
+
