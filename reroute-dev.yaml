@@ -33,11 +33,11 @@
     - name: reroute_tag
       prompt: Enter IAP# to reroute traffic to (31,41, etc)
       private: no
-      
-
+ 
     - name: iap_prefix
       prompt: Enter prefix to reroute with mask
       private: no
+  
 
   tasks:
 
@@ -140,82 +140,80 @@
         cli_json: "{{ result.results | map(attribute='ansible_facts') | list }}"
       no_log: true
 
-    - name: Create Dictionary prefix/mask/community variable
+    - name: Create List of prefixes with NFG Communities
       set_fact:
-        p_data: 
-          - "Prefix": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }}"
-            "mask": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data }}"
-            "comm": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
-      loop: "{{ cli_json }}"
-      register: result
+        p_valid: "{{ p_valid|default([]) + [item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data + '/' + item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data]  }}"
+  #/[item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data] }}"
+  #        "comm": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
+      loop: "{{ cli_json | flatten }}"
+      when: 
+        - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] is search('68:68')
+        - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] | default("")
+      register: config_set
+      ignore_errors: true
       no_log: true
 
-    - name: Debug p_data
-      debug:
-        msg: "{{ p_data }}"
-
-    - pause:
-        seconds: 5
-
-    - name: Set prefix match variable
+    - name: Prefix without comms
       set_fact:
-        p_match: "{{ item }}"
-      loop: "{{ result.results | map(attribute='ansible_facts') | list }}"
-      register: result 
+        no_comms: "{{ no_comms|default([]) + [item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0]] }}"
+      loop: "{{ cli_json | flatten }}"
+     
+#### For Reference Only #####
+    - name: Weed out invalid p_data
+      set_fact:
+        p_valid: "{{ p_valid | default([]) + [item.Prefix] }}"
+      loop: "{{ p_data.comm }}"
       when: item is search("68:68")
-      ignore_errors: true
-    
-  #  - debug:
-  #      msg: "{{ p_match }}"
-
-  #  - debug: var=cli_json
-
-    - name: Run jinja on cli_json
-      set_fact: |
-        p_data:
-          {% for p in item.cli_json.route_information %}
-          {% for r in p.route_table %}
-          {{ r }}
-          {% endfor %}
-          {% endfor %}
-      loop: "{{ cli_json }}"
-      loop_control:
-        label: "{{ item }}"
-      when: item is search("68:68")
-      register: result
-      
-
-    - set_fact:
-        list: "{{ item }}"
-      with_items: "{{ result.results | map(attribute='ansible_facts') |list }}"
+      register: valid_result
+      tags: never
 
     - debug:
-        msg: "{{ list | type_debug }}"
+        msg: |
+          "These are valid NFG prefixes!"
+          "{{ item }}"
+      loop: "{{ p_valid }}"
+      when: p_valid is defined
+      register: config_set
 
-    - debug: var=list
+    - debug:
+        msg: |
+          "No valid NFG communities found"
+      when: config_set.skipped | default(false)
 
-
+    - debug:
+        msg: |
+          "set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ item }}"
+      loop: "{{ p_valid }}"
+      register: config_set
+      when: p_valid is defined
+  
+    - name: Generate IAP configs
+      template:
+        src: "./templates/iap_reroute_prefix.j2"
+        dest: "./config_files/{{ item }}_config.set"
+      loop: "{{ iap_rtrs }}"
+      loop_control:
+        label: "{{ item }}"
+      when: p_valid is defined
+  
+    - pause: 
+        seconds: 5
+   
     - name: Create flat prefix_data variable
       set_fact:
         prefix_data: "{{ item.cli_json.route_information }}"
       loop: "{{ cli_json| flatten(levels=5) }}"
       register: flat
- #     no_log: true
+      tags: never
     
-    - set_fact: 
-        prefix1: "{{ flat.results | map(attribute='ansible_facts') | list }}"
-
-    - debug: var=prefix1
-
     - name: Save cli_json to file
       copy:
         content: "{{ cli_json }}"
         dest: "./reports/{{ inventory_hostname }}.json"
-
+    
     - name: Run sed on data file
       shell: sed -i '/ |-/d' ./reports/{{ inventory_hostname }}.json
       delegate_to: localhost
-      tags: never
        
     - name: Read in file and return a list
       set_fact:
@@ -224,117 +222,38 @@
 
     - name: Set prefix and community variable
       set_fact:
-        prefix: "{{ prefix | default([]) + [{ 'Prefix' : item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }] + [{ 'comms' : item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }] }}"
+        prefix: "{{ prefix | default([]) + [{ 'Prefix' : item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }] + [{ 'comms' : item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities }] }}"
    #     "Prefix": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data }}"
    #     "comms": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
       loop: "{{ prefix_data }}"
       register: p_data
+      tags: never
 
-    - name: Test
+    - name: Create a list non nfg prefixes
       set_fact:
-        test: "{{ test | default([]) + [{ 'Prefix': item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data, 'comms': item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }] }}"
+        non_nfg: "{{ non_nfg | default([]) + [{ 'Prefix': item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data, 'comms': item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }] }}"
       loop: "{{ prefix_data }}"
-
-    - name: Debug test -> list
-      debug:
-        msg: "{{ test }}"
-
-    - name: Weed out invalid
-      set_fact:
-        valid: "{{ item.Prefix }}"
-      loop: "{{ test }}"
-      when: item is search("68:68")
-      register: valid_result
-
-    - set_fact:
-        test3: "{{ valid_result.results | map(attribute='ansible_facts') | list }}"
-
-    - debug: 
-        msg: "{{ valid_result.results | map(attribute='ansible_facts') | list }}"
-
-
-    - set_fact:
-        test4: "{{ item }}" 
-      loop: "{{ valid_result.results | map(attribute='ansible_facts') | list }}"
-      when: item is not skipped
-      register: test4_result
-
-    - debug: var=test4_result
-
-   
-    - name: Debug prefix -> list
-      debug:
-        msg: "{{ prefix }}"
-
-    - name: Set nfg_tag
-      set_fact: 
-        nfg_tag: "{{ p_data.results | map(attribute='ansible_facts') | list }}"
-
-    - debug: var=nfg_tag
-
-    - debug:
-        msg: "{{ nfg_tag | type_debug }}"
-    
-         
-    - name: Set bgp_prefix
-      set_fact:
-        bgp_prefix: "{{ item }}"
-      loop: "{{ nfg_tag }}"
-      loop_control:
-        label: "{{ item }}"
-      when: nfg_tag is search("68:68")
-      register: valid_prefix
-      run_once: true
-
-    - debug:
-        msg: "{{ bgp_prefix | type_debug }}"
-
-    - debug: var=bgp_prefix
-
-    - debug:
-        msg: |
-          {% for Prefix in bgp_prefix.prefix %}
-          {{ loop.index }} is {{ Prefix }}
-          {% endfor %}
-
-    
-    - name: Set valid_prefix from bgp_prefix results
-      set_fact: 
-        valid_prefix: "{{ valid_prefix.results | map(attribute='ansible_facts.bgp_prefix') | list }}"
-     
-
-    - debug:
-        msg: "{{ valid_prefix | type_debug }}"
-
-  
-    - debug:
-        msg: |
-          set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ iap_prefix }}
-      loop: "{{ iaps }}"
-#      loop_control:
-#        label: "{{ item }}"
-      when: valid_prefix is search("68:68")
-      register: config_set
+      when: 
+        - not (item is search("68:68"))
+        - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities | default("")
+      ignore_errors: true
       no_log: true
 
+    - debug: var=non_nfg
+      when: non_nfg is defined
+
     - debug:
         msg: |
-           Prefix contains valid IAP community !!
-           Generating configs for reroute to {{ new_iap_tag }} !!
-      when: not config_set.skipped | default(false)
-      run_once: true
-      ignore_errors: true    
-
-    - name: Generate IAP configs
-      template:
-        src: "./templates/iap_reroute_prefix.j2"
-        dest: "./config_files/{{ item }}_config.set"
-      loop: "{{ iap_rtrs }}"
-      loop_control:
-        label: "{{ item }}"
-      when: valid_prefix is search("68:68") 
+          Prefix does not contain a valid NFG community
+          {% for Prefix in non_nfg %}
+          {{ loop.index }} is {{ Prefix }}
+          {% endfor %}
+      when: non_nfg is defined
+      register: config_set
  
     - debug:
-        msg: "Prefix does not contain a valid IAP community"
-      when: config_set.skipped | default(false) 
+        msg: "Prefix does not contain any BGP community"
+#      when: not (config_set.skipped | default(false)) 
+      when: not non_nfg is defined
+    
 
