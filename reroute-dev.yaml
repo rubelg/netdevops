@@ -1,5 +1,5 @@
 ---
-- name: Build configs to reroute NFG prefix to Test IAP
+- name: Build configs to reroute a prefix to Test IAP
   hosts: all
   connection: network_cli
   gather_facts: no
@@ -58,10 +58,9 @@
         msg: "Traffic will be sent to {{ new_iap_name }}"
       run_once: true
 
-    - debug:
+    - name: PREFIX LIST to generate if IAP route passes validation!
+      debug:
         msg: |
-          PREFIX LIST to generate if IAP route passes validation!
-
           set prefix-list {{ new_iap_tag }}-IAP-TESTING {{ item }}
       loop: "{{ prefixes }}"
       run_once: true
@@ -143,20 +142,25 @@
     - name: Create List of prefixes with NFG Communities
       set_fact:
         p_valid: "{{ p_valid|default([]) + [item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data + '/' + item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data]  }}"
-  #/[item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data] }}"
   #        "comm": "{{ item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }}"
       loop: "{{ cli_json | flatten }}"
       when: 
+        - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities is defined
         - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] is search('68:68')
-        - item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] | default("")
       register: config_set
       ignore_errors: true
       no_log: true
 
-    - name: Prefix without comms
+    - name: Check if prefix has a BGP Community
       set_fact:
-        no_comms: "{{ no_comms|default([]) + [item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0]] }}"
+        NO_BGP_Community: "{{ NO_BGP_Community|default([]) + [item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data] }}"
       loop: "{{ cli_json | flatten }}"
+      when: item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] is not defined 
+      no_log: true
+
+    - name: Prefixes with NO BGP Community
+      debug: var=NO_BGP_Community
+      when: NO_BGP_Community is defined 
      
 #### For Reference Only #####
     - name: Weed out invalid p_data
@@ -167,20 +171,27 @@
       register: valid_result
       tags: never
 
-    - debug:
+    - name: Prefixes with a VALID IAP Community
+      debug: var=p_valid
+      when: p_valid is defined
+
+    - name: Prefixes with VALID IAP Community
+      debug:
         msg: |
-          "These are valid NFG prefixes!"
+          "These are valid IAP prefixes!"
           "{{ item }}"
       loop: "{{ p_valid }}"
       when: p_valid is defined
       register: config_set
+      tags: never
 
     - debug:
         msg: |
           "No valid NFG communities found"
       when: config_set.skipped | default(false)
 
-    - debug:
+    - name: Config lines to create for valid prefixes
+      debug:
         msg: |
           "set prefix-list-GW{{ reroute_tag }}-FOR-IAP-TESTING {{ item }}"
       loop: "{{ p_valid }}"
@@ -229,9 +240,9 @@
       register: p_data
       tags: never
 
-    - name: Create a list non nfg prefixes
+    - name: Create a list prefixes without a valid IAP Community
       set_fact:
-        non_nfg: "{{ non_nfg | default([]) + [{ 'Prefix': item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data, 'comms': item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }] }}"
+        non_nfg: "{{ non_nfg | default([]) + [{ 'Prefix': item.cli_json.route_information[0].route_table[0].rt[0].rt_destination[0].data +'/'+item.cli_json.route_information[0].route_table[0].rt[0].rt_prefix_length[0].data, 'comms': item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] }] }}"
       loop: "{{ prefix_data }}"
       when: 
         - not (item is search("68:68"))
@@ -244,16 +255,21 @@
 
     - debug:
         msg: |
-          Prefix does not contain a valid NFG community
+          Prefix does not contain a valid IAP community
           {% for Prefix in non_nfg %}
           {{ loop.index }} is {{ Prefix }}
           {% endfor %}
       when: non_nfg is defined
       register: config_set
- 
+
+    - set_fact:
+        NO_BGP_Community: []
+
     - debug:
-        msg: "Prefix does not contain any BGP community"
-#      when: not (config_set.skipped | default(false)) 
+        msg: "Remaining prefixes do not contain a valid BGP community"
+ #      when: not (config_set.skipped | default(false)) 
       when: not non_nfg is defined
+#      when: item.cli_json.route_information[0].route_table[0].rt[0].rt_entry[0].communities[0] is not defined 
     
+
 
