@@ -35,7 +35,12 @@
       private: no
  
     - name: iap_prefix
-      prompt: Enter prefix to reroute with mask
+      prompt: |-
+        
+        !! Enter prefix to reroute with mask in the x.x.x.x/y format !!
+        !! Prefix-list will be built on the prefix found in the routing table which could be an aggregate!!
+
+        Multiple prefixes enter as x.x.x.x/y,x.x.x.x/y,x.x.x./y
       private: no
   
 
@@ -57,6 +62,18 @@
     - debug:
         msg: "Traffic will be sent to {{ new_iap_name }}"
       run_once: true
+
+    - name: Remove mask to get host route
+      set_fact:
+        new_prefix: "{{ item | regex_replace('[/].*', '') }}"
+      loop: "{{ prefixes }}"
+      register: result
+
+    - name: Set host_route for lookup
+      set_fact:
+        host_route: "{{ result.results | map(attribute='ansible_facts.new_prefix') | list }}"
+
+    - debug: var=host_route
 
     - name: PREFIX LIST to generate if IAP route passes validation!
       debug:
@@ -114,7 +131,7 @@
         commands:
           - "show route {{ item }} detail"
         display: json
-      loop: "{{ prefixes }}"
+      loop: "{{ host_route }}"
       register: show_cmds
 
     # Each show command returns a list, show_cmds.results is a dictionary
