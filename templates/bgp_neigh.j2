@@ -1,0 +1,41 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+BGP Peer report for {{ inventory_hostname }}
+---------------------------------
+{% for item in bgp_neighbor.bgp_information %} 
+{% for p in item.bgp_peer %}
+  {% for a in p.peer_address %}
+Peer Address:  {{ a.data }}
+  {% endfor %}
+  {% for b in p.peer_state %}
+Peer State:  {{ b.data }}
+  {% endfor %}
+  {% for as in p.peer_as %}
+ASN:: {{ as.data }}
+  {% endfor %}
+  {% if p.bgp_rib is defined %}
+   {% for c in p.bgp_rib %}
+    {% for d in c.name %}
+Table: {{ d.data }}
+    {% endfor %}
+    {% for d in c.received_prefix_count %}
+   Received Prefixes:  {{ d.data }}
+    {% endfor %}
+	{% if c.accepted_prefix_count is defined %}
+    {% for d in c.accepted_prefix_count %}
+   Accepted Prefixes:  {{ d.data }}
+    {% endfor %}
+	{% endif %}
+	{% for d in c.active_prefix_count %}
+   Active Prefixes: {{ d.data }}
+    {% endfor %}
+	{% if c.advertised_prefix_count is defined %}
+    {% for d in c.advertised_prefix_count %}
+   Advertised Prefixes:  {{ d.data }}
+    {% endfor %}
+	{% endif %}
+   {% endfor %}
+  {% endif %}
+  
+{% endfor %} 
+{% endfor %}

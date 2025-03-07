@@ -1,53 +1,81 @@
 ---
-## Playbook pulls bgp neighbor information in json format and creates a list of elements
-## Data can be pull from each element
-- name: Validate the state of BGP and ISIS Peers
+- name: Validate the state of BGP Peers
   hosts: all
   connection: network_cli
   gather_facts: no
     #  serial: 1
 
   vars:
-    
+  
     show_cmds:
       - show bgp summary
       - show isis adjacency
+      
   vars_prompt:
-    - name: results_file
-      prompt: Enter results filename
+    - name: "filename"
+      prompt: "Enter (1) for precheck (2) for postcheck"
       private: no
 
   tasks:
+    - set_fact:
+        results_file: "precheck"
+      when: filename == '1'
+
+    - set_fact:
+        results_file: "postcheck"
+      when: filename == '2'
+
+    - name: Find old reports
+      find:
+        path: "{{ report_dir }}"
+        file_type: file
+        patterns: '{{ inventory_hostname }}_*.postcheck'
+      register: old_reports
+      when: filename == '1' 
+      
+    - name: Delete old reports
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ old_reports.files }}"
+      when: filename == '1'
+
     - name: Run show commands
       cli_command:
         command: "{{ item }}"
       with_items: "{{ show_cmds }}"
       register: CLI_OUTPUT
-      
+
     - debug: var=CLI_OUTPUT.results[0].stdout
 
-    - debug: var=CLI_OUTPUT.results[1].stdout
+        #    - debug: var=CLI_OUTPUT.results[1].stdout
 
     - name: Run BGP and ISIS filters
       set_fact:
         BGP_IPV4_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_bgp_neighbors }}"
         BGP_IPV6_NEIGHBORS: "{{ CLI_OUTPUT.results[0].stdout | parse_ipv6_bgp_neighbors }}"
         ISIS_NEIGHBORS: "{{ CLI_OUTPUT.results[1].stdout | parse_isis_neighbors }}"
-      
-#    - debug: var=BGP_IPV4_NEIGHBORS
 
-#    - debug: var=ISIS_NEIGHBORS
+          #    - debug: var=BGP_IPV4_NEIGHBORS
 
-    - name: Save bgp summary results -> {{ inventory_hostname }}_{{ results_file }}.bgpsum
-      copy:
-        content: "{{ CLI_OUTPUT.results[0].stdout | to_nice_yaml }}"
-        dest: "{{ report_dir}}/{{ inventory_hostname }}_{{ results_file }}.bgpsum"
+          #    - debug: var=ISIS_NEIGHBORS
 
-    - name: Generate BGP/ISIS state report -> {{ inventory_hostname }}_neigh_state.txt
+    - name: Generate BGP/ISIS state report
       template:
         src: "./templates/bgp_report.j2"
-        dest: "./reports/{{ inventory_hostname }}_neigh_state.txt"
+        dest: "./reports/{{ inventory_hostname }}_neigh_state.{{ results_file }}"
+        
+    - name: Cat {{ inventory_hostname }} BGP/ISIS Neighbor report
+      shell: "cat ./reports/{{ inventory_hostname }}_neigh_state.{{ results_file }}"
+      register: cat_neigh
+      ignore_errors: yes
       
+    - name: Set neighbor report vars
+      set_fact:
+        report: "{{ cat_neigh.stdout | to_nice_yaml }}"
+
+    - debug: var=report        
+
     - name: "Validate ISIS Neighbors"
       assert:
         quiet: True
@@ -60,7 +88,8 @@
       loop: "{{ ISIS_NEIGHBORS }}"
       loop_control:
         label: "Interface: {{ item.Interface }}, State: {{ item.State }}"
-      
+
+
     - name: "Establisthed IPv4 BGP Peers"
       assert:
         quiet: True
@@ -70,6 +99,7 @@
           - "item.State != 'Active'"
           - "item.State != 'Idle'"
           - "item.State != 'Connect'"
+          
         msg: |-
           Neighbor {{ item.Peer }} is not established!
       # This is the magic that causes the assert to run for each element
@@ -80,153 +110,117 @@
         # this the full object gets printed out.
         label: "Peer: {{ item.Peer }}, AS Number: {{ item.AS }}"
       ignore_errors: true
-        
-    - set_fact:
-        bgp_peers: []
-      
-    - name: Set BGP Peers
-      set_fact:
-        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
-      with_items: "{{ BGP_IPV4_NEIGHBORS }}"
-      when: item.State == 'Establ'
-      no_log: true
-      delegate_to: localhost
-      
-    - name: Add IPV6 BGP Peers
-      set_fact:
-        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
-      with_items: "{{ BGP_IPV6_NEIGHBORS }}"
-      when: item.State == 'Establ'
-      no_log: true
-      delegate_to: localhost
     
+    - name: "Establisthed IPv6 BGP Peers"
+      assert:
+        quiet: True
+        # Ensure that the state is not active or idle. If it is established 
+        # the number of routes received.
+        that: 
+          - "item.State != 'Active'"
+          - "item.State != 'Idle'"
+          - "item.State != 'Connect'"
+          
+        msg: |-
+          Neighbor {{ item.Peer }} is not established!
+      # This is the magic that causes the assert to run for each element
+      # in the array.
+      loop: "{{ BGP_IPV6_NEIGHBORS }}"
+      loop_control:
+        # Create a label to output for each element in the array. Without
+        # this the full object gets printed out.
+        label: "Peer: {{ item.Peer }}, AS Number: {{ item.AS }}"
+      ignore_errors: true
     
-## Test 12/6/23
-    - name: Set bgp peer for only AS209
-      set_fact:
-        bgp_peers: "{{ item.Peer }}"
-      with_items: "{{ BGP_IPV4_NEIGHBORS }}"
-      when: (item.AS == '209')
-      tags: ["209", "never"]
-        
-        
-## Endtest
-
-    - debug: var=bgp_peers
-       
-    - name: Show BGP neighbor JSON output
+         
+    - name: run show bgp neighbor JSON output
       junos_command:  
         commands:
-          - "show bgp neighbor {{ item }}"
+          - "show bgp neighbor"
         display: json  
-      with_items: "{{ bgp_peers }}"
-      register: result
- 
-    - set_fact:
-        cli_json: "{{ result.results | map(attribute='stdout') | list }}"
- 
-## Following tasks are needed to create ansible/jinja iterable data        
-   
-    - name: Regex remove 'master' line in the show output
+#      cli_command:
+#        command: 'show bgp neighbor {{ item }} | display json no-export-path'
+#      with_items: "{{ bgp_peers }}"
+      register: bgp_json
+
+    # bgp_neighbor is a dictionary
+    - name: Regex replace dash/master in json output
       set_fact:
-        cli_json: "{{ cli_json| regex_replace('{master}', '   ') }}"
-  
-    - name: Regex replace -
-      set_fact:
-        bgp_neighbor: "{{ item|regex_replace('-', '_') }}"
-      with_items: "{{ cli_json }}"
+        bgp_neighbor: "{{ item|regex_replace('-', '_')|regex_replace('{master}', '  ') | trim }}"
+      with_items: "{{ bgp_json.stdout }}"
       loop_control:
         label: "{{ item }}"
       no_log: true
       register: result
-    
-#    - debug: var=result.results[0].item
-        
+
+#    - name: Save bgp_neighor 
+#      copy:
+#        content: "{{ bgp_neighbor | to_nice_yaml }}"
+#        dest: "./reports/{{ inventory_hostname }}_bgp_neighbor.json"
+
+### Old way to clean up json output
     - set_fact:
-        test: "{{ item.ansible_facts }}"
-      loop: "{{ result.results }}" 
-      no_log: true      
-          
-    - name: Create cli_json list
-      set_fact:
-        cli_json: "{{ result.results | map(attribute='ansible_facts')| list }}"
+        cli_json: "{{ bgp_json.stdout| regex_replace('{master}', '  ')| regex_replace('-','_') | trim }}"
       no_log: true
- 
-## Unix commands to clean up files - REFERENCE ONLY
-         
-    # - name: Run sed to remove {master} line
-    #   shell: sed -i '/{master}/d' ./reports/{{ inventory_hostname }}.json 
-               
-    #- name: Run sed to remove --| lines
-    #  shell: sed -i '/-   - |-/d' ./reports/{{ inventory_hostname }}.json
-    ## Replace pattern s = substitute  g = global
-    #  shell: sed -i 's/- - |-/-|-/g' ./reports/{{ inventory_hostname }}.json 
-
-    #- name: Run sed to remove empty lines
-    #  shell: sed -i '/^$/d' ./reports/{{ inventory_hostname }}.json      
+      tags: never
     
-   ## Json file needs cleaned up to read in as true json format 
-    #- name: Run sed on json file
-    ## For interfaces use sed '1,2d'    
-    #  shell: sed '1d' ./reports/{{ inventory_hostname }}.json > ./reports/{{ inventory_hostname }}-1.json
- 
-    - name: Debug to test for BGP Peer Status -> Single Peer
-      debug:
-        msg: |
-             Peer address: {{ bgp_neighbor.bgp_information[0].bgp_peer[0].peer_address[0].data }}
-             Peer ASN:  {{ bgp_neighbor.bgp_information[0].bgp_peer[0].peer_as[0].data }}
-             Peer state: {{ bgp_neighbor.bgp_information[0].bgp_peer[0].peer_state[0].data }}
-             Table: {{ bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].name[0].data }}
-             Advertisd prefixes: {{ bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].advertised_prefix_count[0].data }}
-             Received prefixes:  {{ bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].received_prefix_count[0].data }}
-             Accepted prefixes:  {{ bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].accepted_prefix_count[0].data }}
-#      no_log: true
-      
-    - name: Set bgp_results for inet.0 table fact from cli_json list
-      set_fact:
-        bgp_results: 
-          - "Peer address: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_address[0].data }}"
-          - "Peer ASN: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_as[0].data }}"
-          - "Peer ID: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_id[0].data }}"
-          - "Peer state: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_state[0].data }}"
-          - "Table:  {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].name[0].data }}"
-          - "Advertisd prefixes: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].advertised_prefix_count[0].data }}"
-          - "Received prefixes:  {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].received_prefix_count[0].data }}"
-          - "Accepted Prefixes: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].accepted_prefix_count[0].data }}"
-      with_items: "{{ cli_json }}"
-      register: data
-      no_log: true
-
-    - name: Debug inet.0 table
-      debug: 
-        msg: "{{ data.results | map(attribute='ansible_facts') | list }}"
-
-## Run a jinja template on the cli_json list --> Does all bgp ribs
-    - name: Run jinja on cli_json to create report -> {{ inventory_hostname }}_bgp_peer_report.ext
-      template:
-        src: "./templates/bgp_results.j2"
-        dest: "./reports/{{ inventory_hostname }}_bgp_peer_report.txt"    
- 
-    - name: Save bgp_results variable for inet.0 -> {{ inventory_hostname }}_bgp_results.txt
+    - name: Save bgp data to file
       copy:
-        content: "{{ data.results | map(attribute='ansible_facts') | list | to_nice_yaml }}"
-        dest: "{{ report_dir}}/{{ inventory_hostname }}_bgp_results.txt"
-
-    - name: Save inet.0 bgp results -> {{ inventory_hostname }}_{{ results_file }}.ext
-      lineinfile:
-        create: true
-        dest: "{{report_dir}}/{{ inventory_hostname }}_{{results_file}}.txt"
-        line: 
-          - "BGP PEER INFO"
-          - "Peer name: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_address[0].data }}"
-          - "Peer address: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_id[0].data }}"
-          - "Peer state: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].peer_state[0].data }}"
-          - "Table: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].name[0].data }}"
-          - "Advertisd prefixes: {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].advertised_prefix_count[0].data }}"
-          - "Received prefixes:  {{ item.bgp_neighbor.bgp_information[0].bgp_peer[0].bgp_rib[0].received_prefix_count[0].data }}" 
-      with_items: "{{ cli_json }}"
+        content: "{{ cli_json | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}_bgp.json"
+      delegate_to: localhost
+      tags: never
+      
+    - name: Run sed on file to clean up bad lines
+      shell: sed -i '1d' ./reports/{{ inventory_hostname }}_bgp.json
+      delegate_to: localhost
+      tags: never
+          
+    - name: Read in cleaned up json data
+      set_fact:
+        json_file: "{{ lookup('file', './reports/{{ inventory_hostname }}_bgp.json') | from_json }}"
+      register: result
+      delegate_to: localhost
       no_log: true
+      tags: never
+### End old json cleanup ###
+  
+# Run jinja template on dictionary
+    - name: Run jinja template on json_file variable -> {{ inventory_hostname }}
+      template:
+        src: "./templates/bgp_neigh.j2"
+#        src: "./templates/bgp_peer.j2"
+        dest: "./reports/{{ inventory_hostname }}_bgp-peers.{{ results_file }}"
 
-#          - "'Prefixes advertised to peers='{{ bgp_routes.results | map(attribute='item.Peer') }}"
-#          - "{{ bgp_routes.results | map(attribute='stdout') | join('\n') }}"
+    
+    - name: Check for precheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_bgp-peers.precheck"
+      register: precheck
+      delegate_to: localhost
 
+    - name: Check for postcheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_bgp-peers.postcheck"
+      register: postcheck
+      delegate_to: localhost
+      
+    - name: Diff Pre and Post BGP/ISIS Neighbors
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_neigh_state.{{results_file}}"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_neigh_state.precheck"
+      check_mode: yes
+      diff: yes
+      tags: diff
+      when: precheck.stat.exists and postcheck.stat.exists    
+      
+    - name: Diff Pre and Post BGP State
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_bgp-peers.{{results_file}}"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_bgp-peers.precheck"
+      check_mode: yes
+      diff: yes
+      tags: diff
+      when: precheck.stat.exists and postcheck.stat.exists
+      register: diff_data
+    
