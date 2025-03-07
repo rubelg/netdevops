@@ -3,18 +3,37 @@
   hosts: all
   connection: network_cli
   gather_facts: no
-  serial: 1
+#  serial: 1
 
   vars_prompt:
-    - name: results_file
-      prompt: Enter results filename suffix - precheck or postcheck
+#    - name: results_file
+#      prompt: Enter results filename suffix - pre_asi/post_asi
+#      private: no
+
+    - name: "filename"
+      prompt: "Enter (1) for pre_asi (2) for post_asi"
       private: no
 
   vars:
+  
     show_cmds:
       - show bgp summary
       - show isis adjacency
   tasks:
+         
+    - set_fact:
+        results_file: "pre_asi_validate"
+      when: filename == '1'    
+
+    - set_fact:
+        results_file: "post_asi_validate"
+      when: filename == '2'  
+
+    - name: Delete old data files
+      shell: "rm ./reports/{{ item }}*validate*.txt"
+      with_items: "{{ inventory_hostname }}"
+      when: filename == "1"
+      ignore_errors: yes      
          
     - name: Run show commands
       cli_command:
@@ -38,10 +57,10 @@
 
 #    - debug: var=ISIS_NEIGHBORS
     
-    - name: Generate BGP/ISIS state report -> {{ inventory_hostname }}_{{ results_file }}_validate_state.txt
+    - name: Generate BGP/ISIS state report -> {{ inventory_hostname }}_{{ results_file }}_state.txt
       template:
         src: "./templates/bgp_report.j2"
-        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}_validate_state.txt"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}_state.txt"
 
     - name: "Validate ISIS Neighbors"
       assert:
@@ -97,11 +116,74 @@
       no_log: true
       delegate_to: localhost
 
+## Lumen Peer only 4/23/24
+    - name: Normalize bgp_peers for AS209 and AS3356
+      set_fact:
+        bgp_peers: []
+      tags: ["209", "never"]
+    
+    - name: Normalize bgp_peers for AS27064 or AS27066
+      set_fact:
+        bgp_peers: []
+      tags: ["27064", "27065", "27066", "never"]
+      
+    - name: Set IPv4 bgp peers for AS27064 or AS27066 or AS27065
+      set_fact:
+         bgp_peers: "{{ bgp_peers + [item.Peer] }}"
+      with_items: "{{ BGP_IPV4_NEIGHBORS }}"
+      when: (item.AS == '27064') or (item.AS == '27066')  or (item.AS == '27065')
+      tags: ["27064", "27065", "27066", "never"]
+
+    - name: Set IPv6 bgp peer for AS27064 or AS27065 or AS27066
+      set_fact:
+        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
+      with_items: "{{ BGP_IPV6_NEIGHBORS }}"
+      when: (item.AS == '27064') or (item.AS == '27066') or (item.AS == '27065')
+      tags: ["27064", "27065", "27066", "never"]
+
+    - name: Set IPv4 bgp peer for AS209 or AS3356
+      set_fact:
+        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
+      with_items: "{{ BGP_IPV4_NEIGHBORS }}"
+      when: (item.AS == '209') or (item.AS == '3356')
+      tags: ["209", "never"]
+      
+    - name: Set IPv6 bgp peer for AS209 or AS3356
+      set_fact:
+        bgp_peers: "{{ bgp_peers + [item.Peer] }}"
+      with_items: "{{ BGP_IPV6_NEIGHBORS }}"
+      when: (item.AS == '209') or (item.AS == '3356')
+      tags: ["209", "never"]
+
     - debug: var=bgp_peers
+
+    - name: Loop commands
+      junos_command: 
+        commands: 
+          - "show route advertising-protocol bgp {{ item[0] }} | match {{ item[1] }}"
+          - "show bgp neighbor {{ item[0] }} | match prefixes"
+#        display: json
+      with_nested:
+        - "{{ bgp_peers }}"
+        - "{{ prefixes }}"
+      vars:
+        prefixes:
+          - 131.78
+          - 214.28
+      register: bgp_loop
+      tags: ["never"]
+
+    - name: Debug bgp_loop
+#      debug: var=bgp_loop
+      debug:
+        msg: "{{ bgp_loop.results }}"
+      tags: ["never"]
 
     - name: Get prefixes advertised to BGP Peers 
       cli_command:
         command: "show route advertising-protocol bgp {{ item }}"
+#        command: "show route advertising-protocol bgp {{ item }} community 209:999 detail"
+#          - "show route advertising-protocol bgp {{ item }} | match 131.78"
        # command:  "show route advertising-protocol bgp {{ item.Peer }}"
        #  loop: "{{ BGP_IPV4_NEIGHBORS }}"
       with_items: "{{ bgp_peers }}"
@@ -114,18 +196,16 @@
 #          - "'Prefixes from peers='{{ bgp_routes.results | map(attribute='item.Peer') | join('\n') }}"
 #         - "{{ bgp_routes | map(attribute='stdout_lines') | join('\n') }}"
       
-    - debug:
-        msg:
-#          - "{{bgp_routes.results[0].stdout | to_nice_yaml }}"i
-#           - "{{ item }} | to_nice_yaml }}"
-          - "{{ item.stdout | to_nice_yaml }}"
-      loop: "{{ bgp_routes.results }}"
-# Use with ipv4 bgp peers
-      loop_control:
-#        label: "{{ item.item.Peer }}"
-        label: "{{ item.item }}"
-      when: item.stdout is defined and item.stdout | length > 0
-      delegate_to: localhost
+#    - debug:
+#        msg:
+#          - "{{ item.stdout | to_nice_yaml }}"
+#      loop: "{{ bgp_routes.results }}"
+#### Use with ipv4 bgp peers
+#      loop_control:
+####       label: "{{ item.item.Peer }}"
+#        label: "{{ item.item }}"
+#      when: item.stdout is defined and item.stdout | length > 0
+#      delegate_to: localhost
 
     - set_fact:
         readout: "{{ bgp_routes.results | to_nice_yaml }}"
@@ -154,7 +234,22 @@
        #  loop: "{{ BGP_IPV4_NEIGHBORS }}"
       with_items: "{{ bgp_peers }}"
       register: bgp_rec_routes
- 
+      tags: never
+
+###########################
+# 9/3 PUll only inet0 and inet6
+    - name: Get prefixes received from BGP Peers
+      cli_command:
+        command: "show route receive-protocol bgp {{ item[0] }} table {{ item[1] }}"
+      with_nested:
+        - "{{ bgp_peers }}"
+        - "{{ tables }}"
+      vars:
+        tables:
+          - inet.0
+          - inet6.0
+      register: bgp_rec_routes
+
     - name: Debug received bgp routes  
       debug:
         msg:
@@ -164,40 +259,43 @@
         label: "{{ item.item }}"
       when: item.stdout is defined and item.stdout | length > 0
       delegate_to: localhost
-      
+      no_log: true 
+      tags: never
+ 
     - name: Save bgp received routes results to file -> {{ inventory_hostname }}_{{ results_file }}_recroutes.txt
       lineinfile:
         path: "{{report_dir}}/{{ inventory_hostname }}_{{ results_file }}_recroutes.txt"
-        line: "Prefixes sent to BGP Peer {{ item.item }}\n{{ item.stdout }}\n"
+        line: "Prefixes received from BGP Peer {{ item.item }}\n{{ item.stdout }}\n"
         create: true
       loop: "{{ bgp_rec_routes.results }}"
       loop_control:
         label: "{{ item.item }}"
       when: item.stdout is defined
       delegate_to: localhost
+      no_log: true
       
     - name: Check for pre_asi files
       stat:
-        path: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_advroutes.txt"
+        path: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_validate_state.txt"
       register: pre_asi
 
     - name: Check for post_asi files
       stat:
-        path: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_advroutes.txt"
+        path: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_validate_state.txt"
       register: post_asi
 
     - name: Diff pre_asi/post_asi advertised routes
       copy:
-        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_advroutes.txt"
-        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_advroutes.txt"
+        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_validate_advroutes.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_validate_advroutes.txt"
       check_mode: yes
       diff: yes
       when: pre_asi.stat.exists and post_asi.stat.exists
       
     - name: Diff pre_asi/post_asi received routes
       copy:
-        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_recroutes.txt"
-        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_recroutes.txt"
+        src: "{{ report_dir }}/{{ inventory_hostname }}_post_asi_validate_recroutes.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_pre_asi_validate_recroutes.txt"
       check_mode: yes
       diff: yes
       when: pre_asi.stat.exists and post_asi.stat.exists  

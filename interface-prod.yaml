@@ -7,8 +7,7 @@
 
   vars:
     ansible_network_os: junos
- 
-
+  
   tasks:
   
     - name: Run show interfaces | display json
@@ -125,6 +124,7 @@
     - name: Debug Physical Interface State
       debug:
         msg: "{{ physical }}"
+
  
 ## Tasks below are for debugging only 
 #    - name: Loop over list

@@ -1,0 +1,37 @@
+---
+- name: Delete old reports
+  hosts: all
+  gather_facts: no
+  connection: localhost
+  become: no
+
+#  vars:
+#    ansible_command_timeout: 15
+ 
+  tasks:
+
+    - name: Set report directory path
+      set_fact:
+        report_dir: "{{ user_data_path }}/reports"
+      
+ 
+    - name: Confirm report directory
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+      delegate_to: localhost
+
+    - name: Find old reports
+      find:
+        path: "{{ report_dir }}"
+        file_type: file
+        patterns: '{{ inventory_hostname }}*'
+      register: old_reports
+      delegate_to: localhost
+
+    - name: Delete old reports
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ old_reports.files }}"
+      delegate_to: localhost

@@ -1,0 +1,30 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+Interfaces on {{ inventory_hostname }}
+---------------------------------
+{% for item in json_data.interface_information %} 
+{# {{ item.attributes }} #}
+ 
+{%- for p in item.logical_interface %}
+  {% for a in p.name %}
+Interface: {{ a.data }}
+  {% endfor %}
+  {% if p.oper_status is defined %}
+    {% for d in p.oper_status %}
+Oper Status: {{ d.data }}
+    {% endfor %}
+  {% endif %}
+
+{% endfor %}
+{% for p in item.physical_interface %}
+  {% for a in p.name %}
+Interface: {{ a.data }}
+  {% endfor %}
+  {% if p.oper_status is defined %}
+    {% for d in p.oper_status %}
+Oper Status: {{ d.data }}
+    {% endfor %}
+  {% endif %}
+  
+{% endfor %}  
+{% endfor %}

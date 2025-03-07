@@ -1,0 +1,8 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+Hostname: {{ inventory_hostname }}
+----------------------------------
+{% for item, details in cli_json["bgp-information"]["bgp-peer"].items() %}
+Neighbor:        {{ details["peer-address"]["data"] }}
+
+{% endfor %}

@@ -1,0 +1,215 @@
+---
+- name: Gather interface information
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+#  serial: 1
+
+  vars:
+#    ansible_user: redhat
+#    ansible_password: redhat
+  
+  tasks:
+  
+    - name: Get interface json data
+      junos_command:  
+        commands:
+          - "show interfaces"
+        display: json  
+      register: result
+      
+    - set_fact:
+        cli_json: "{{ result.stdout | from_yaml }}"
+        
+# Needed to create ansible/jinja iterable data        
+    - name: Regex replace -
+      set_fact:
+        cli_json: "{{ cli_json| regex_replace('-', '_') }}"
+      register: result
+      delegate_to: localhost
+
+# Clean up {master} line from show command          
+    - name: Regex replace master
+      set_fact:
+        clean_json: "{{ cli_json| regex_replace('{master}', '   ') }}"
+      register: result
+      delegate_to: localhost
+   
+    - name: Save interface data to file
+      copy:
+        content: "{{ clean_json | to_yaml }}"
+# Readable file -> content: "{{ cli_json | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}.jason" 
+      delegate_to: localhost        
+  
+# Json file needs cleaned up to register variable as true json format  
+    - name: Run sed on file to clean up bad lines
+      shell: sed '1d' ./reports/{{ inventory_hostname }}.jason > ./reports/{{ inventory_hostname }}.json
+      delegate_to: localhost
+      no_log: true
+   
+    - name: Read in cleaned up json data
+      set_fact:
+        json_data: "{{ lookup('file', './reports/{{ inventory_hostname }}.json') | from_json }}"
+      register: result
+      delegate_to: localhost
+      no_log: true
+    
+#   Does the same as above
+#    - include_vars:
+#        file: ./reports/{{ inventory_hostname }}.json
+#        name: new_json
+        
+#    - debug: var=new_json
+    
+    - set_fact:
+        list: "{{ result.ansible_facts }}"    
+
+ 
+    - name: Save interface dictionary
+      copy:
+        content: "{{ list | to_nice_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}.dict" 
+            
+# For debugging only 
+#    - name: Loop over list
+#      debug:
+#     #   msg: "Key={{ item.0.key }} value={{ item.1 }}"
+#     # loop: "{{ list | dict2items | subelements('value') }}"
+#        msg: "Key = {{ item.key }} value ={{ item.value }} "
+#      loop: "{{ list | dict2items }}"
+#      register: result
+#      delegate_to: localhost
+        
+# For debugging only
+#    - name: Debug Interface list
+#      debug:
+#        msg: "Interface Name: {{ json_data.interface_information[0].physical_interface[0].name[0].data }}"          
+  
+## Try to find index for loop  ! Not needed since jinja being used !
+## Index will be the number of physical interfaces in the device 
+    - name: Get physical interface number
+      set_fact:
+        phy_intf_idx: "{{ index }}"
+   #   when: item == max
+      loop: "{{ json_data.interface_information[0].physical_interface }}"
+      loop_control:
+        index_var: index
+      vars:
+        max: "{{ json_data.interface_information[0].logical_interface | max }}"      
+      delegate_to: localhost
+      no_log: true      
+ 
+    - debug:
+        msg: "Number of physical interfaces {{ phy_intf_idx }}"
+   
+#   Same index as above 
+#    - name: Debug index
+#      debug:
+#        var: my_idx
+#      loop: "{{ json_data.interface_information[0].physical_interface }}"
+#      loop_control:
+#        index_var: my_idx
+# End index routine 
+    
+# Put all physical interfaces in a variable   
+    - set_fact:
+        int_info: "{{ item }}"
+      loop: "{{ json_data.interface_information[0].physical_interface }}"
+#      loop: "{{ json_data.interface_information }}"
+      loop_control: 
+        label: "{{ item }}"
+      register: result
+      delegate_to: localhost
+      no_log: true
+      
+#   Ansible facts always requires a list  
+    - set_fact: 
+        int_data: "{{ result.results | map(attribute='ansible_facts') | list }}" 
+        
+ #   - name: Debug int_data
+ #     debug:
+ #       msg: "{{ int_data  }}"
+   
+    - name: Set Physical Interface Status Variables
+      set_fact:
+        interface_status: 
+          - "Intf: {{ item.int_info.name[0].data }}"
+          - "Admin Status: {{ item.int_info.admin_status[0].data }}"  
+          - "Op Status: {{ item.int_info.oper_status[0].data }}"
+      loop: "{{ int_data }}"
+      register: result
+      delegate_to: localhost
+#      when: item.int_info.description[0].data is defined
+      no_log: true
+
+    - name: Set variable for physical interface report
+      set_fact:
+        intf_rep: "{{ result.results | map(attribute='ansible_facts') | list  }}"
+      delegate_to: localhost
+      no_log: true
+      
+    - name: Debug physical interface status 
+      debug: 
+        var=intf_rep
+
+# Testing when      
+    - name: Testing when
+      set_fact: 
+        int_test: 
+          - Intf: "{{ item.int_info.name[0].data }}"
+          - Desc: "{{ item.int_info.description[0].data }}"
+          - Op Status: "{{ item.int_info.admin_status[0].data }}"  
+          - Admin Status: "{{ item.int_info.oper_status[0].data }}"
+      loop: "{{ int_data }}"
+      loop_control:
+        extended: true
+        label: "{{ item.int_info.name }}"
+      when: item.int_info.description[0].data is defined
+      register: result
+      no_log: true
+      delegate_to: localhost
+     
+         
+    - set_fact:
+        test_1: "{{ result.results | map(attribute='ansible_facts') | list }}"
+      when: result is not skipped
+#      when: result.changed == true
+     
+    - debug: var=test_1
+     
+    - name: Debug using when
+      debug: 
+        msg: |
+            "Interface: {{ item.int_info.name[0].data }}
+             Desc: {{ item.int_info.description[0].data }}
+             Op Status: {{ item.int_info.admin_status[0].data }}  
+             Admin Status: {{ item.int_info.oper_status[0].data }}"
+      loop: "{{ int_data }}"
+      delegate_to: localhost
+      when: item.int_info.description[0].data is defined
+      loop_control:
+        label: "{{ item.int_info.name }}"
+
+ 
+# End Test
+    
+   
+    - name: Save {{ inventory_hostname }} physical interface status
+      copy:
+        content: "{{ intf_rep | to_yaml }}"
+        dest: "./reports/{{ inventory_hostname }}.interfaces"
+       
+    - name: Run jinja template to get interface state
+      template:
+        src: "./templates/interface-home.j2"
+        dest: "./reports/{{ inventory_hostname }}_{{ results_file }}.intf_state"
+    
+    - name: Cat {{ inventory_hostname }} interface state file
+      shell: "cat ./reports/{{ inventory_hostname }}_{{ results_file }}.intf_state"
+      register: cat_jinja
+
+    - set_fact:
+        output: "{{ cat_jinja.stdout | to_nice_yaml }}"
+        
+    - debug: var=output

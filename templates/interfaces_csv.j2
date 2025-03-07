@@ -1,0 +1,83 @@
+Interfaces Report for {{ inventory_hostname }}
+--------------------------------------
+{% for item in json_data.interface_information %}
+
+Interface,AdminState,OpState,InPPS,OutPPS
+{% for p in item.physical_interface %}
+{% if p.description is not defined %}
+{% if p.traffic_statistics is defined %}
+{% for t in p.traffic_statistics %}
+{% if t.input_pps is defined %}
+{% for i in p.name %}
+{% for a in p.admin_status %}
+{% for o in p.oper_status %}
+{% for r in t.input_pps %}
+{% for ro in t.output_pps %}
+{{ i.data }},{{ a.data }},{{ o.data }},{{ r.data }},{{ ro.data }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{# Logical Intf without description
+{% for l in item.physical_interface %}
+{% if l.logical_interface is defined %}
+{% for i in l.logical_interface %}
+{% if i.description is not defined %}
+{% for n in i.name %}
+{{ n.data }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+#}
+Interface,AdminState,OpState,InPPS,OutPPS,Description
+{% for p in item.physical_interface %}
+{% if p.description is defined %}
+{% if p.traffic_statistics is defined %}
+{% for t in p.traffic_statistics %}
+{% for ri in t.input_pps %}
+{% for ro in t.output_pps %}
+{% for i in p.name %}
+{% for a in p.admin_status %}
+{% for o in p.oper_status %}
+{% for d in p.description %}
+{{ i.data }},{{ a.data }},{{ o.data }},{{ ri.data }},{{ ro.data }},{{ d.data }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}
+
+Interface,AdminState,OpState,Description
+{% for l in item.physical_interface %}
+{% if l.logical_interface is defined %}
+{% for i in l.logical_interface %}
+{% if i.description is defined %}
+{% for n in i.name %}
+{% for a in l.admin_status %}
+{% for o in l.oper_status %}
+{% for d in i.description %}
+{{ n.data }},{{ a.data }},{{ o.data }},{{d.data}}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+{% endfor %}   

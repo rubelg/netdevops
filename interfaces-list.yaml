@@ -5,7 +5,8 @@
   gather_facts: no
 
   vars:
-    
+   
+
     show_cmds:
       - show interfaces
 
@@ -38,9 +39,23 @@
       delegate_to: localhost
       no_log: true
 
-#    - debug: 
-#        msg: "{{ json_data }}"
-        
+## Index will be the number of physical interfaces in the device 
+    - name: Get physical interface number
+      set_fact:
+        phy_intf_idx: "{{ index }}"
+   #   when: item == max
+      loop: "{{ json_data.interface_information[0].physical_interface }}"
+      loop_control:
+        index_var: index
+      vars:
+        max: "{{ json_data.interface_information[0].logical_interface | max }}"      
+      delegate_to: localhost
+      no_log: true      
+ 
+    - debug:
+        msg: "Number of physical interfaces: {{ phy_intf_idx }}"
+
+
 #    - copy:
 #        content: "{{ json_data }}"
 #        dest: "./reports/{{ inventory_hostname }}_intf-list.dict"

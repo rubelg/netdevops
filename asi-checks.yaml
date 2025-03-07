@@ -28,49 +28,81 @@
 
     - debug: var=timestamp
  
+  post_tasks:         
+    - name: Compare precheck and postcheck configurations
+      cli_command:
+        command: 'file compare files /var/tmp/{{ inventory_hostname }}_precheck.set /var/tmp/{{ inventory_hostname }}_postcheck.set'
+      when: precheck.stat.exists and postcheck.stat.exists
+      register: config_diff
+
+    - name: Debug config_diff
+      debug: 
+        msg: "{{ config_diff.stdout }}" 
+      when: precheck.stat.exists and postcheck.stat.exists
+ 
   vars_prompt:
     - name: "filename"
       prompt: "Enter (1) for precheck (2) for postcheck"
       private: no
 
   vars:
-    ansible_command_timeout: 10
+    ansible_command_timeout: 20
 
+ 
     showcmds:
-      - "show version"
-      - "show interface description"
-#      - "show chassis alarms"
-      - "show system alarms"
-#      - "show chassis hardware"
-      - "show chassis routing-engine"
-      - "show system boot-messages"
-      - "show system core-dumps"
-      - "show bgp sum"
-      - "show isis adjacency"
-      - "show route summary"
-#      - "show services ipsec-vpn ipsec security-associations brief"
-      - "show system uptime"
-#      - "show chassis craft-interface"
-#      - "show chassis environment"
-#      - "show configuration | display set | save /var/tmp/{{inventory_hostname}}_{{timestamp}}.set"
-
+      - show version
+      - show interface description
+      - show chassis alarms
+      - show system alarms
+      - show chassis hardware
+      - show chassis routing-engine
+      - show system boot-messages
+      - show system core-dumps
+      - show services ipsec-vpn ipsec security-associations brief
+      - show system uptime
+      - show chassis craft-interface
+      - show chassis environment
+      - show bfd session
+      - show bgp sum
+      - show isis adjacency
+      - show route summary
+      - show configuration | save /var/tmp/{{ inventory_hostname }}_{{ results_file }}.set
+      - file copy /var/tmp/{{ inventory_hostname }}_{{results_file}}.set re1:/var/tmp
+#      - show configuration firewall family inet filter PACKET-FORWARDING-SCU-FILTER
+#      - "show configuration firewall family inet filter PACKET-FORWARDING-DCU-FILTER"
+#      - "show configuration firewall family inet6 filter V6-PACKET-FORWARDING-SCU-FILTER"
+#      - "show configuration firewall family inet6 filter V6-PACKET-FORWARDING-DCU-FILTER"
+#      - "show configuration policy-options policy-statement ISP-DCU-TAGGING"
+#      - "show configuration policy-options policy-statement UPE-SCU-TAGGING"
 
   tasks:
-
+    
     - set_fact:
         results_file: "precheck"
       when: filename == '1'
-   
+
     - set_fact:
         results_file: "postcheck"
       when: filename == '2'
+
+    - name: Build report directory
+      set_fact:
+        build_dir: "{{ report_dir }}/build"
+      when: filename == '1'
  
+    - name: Confirm report directory
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+      when: filename == '1'
+
     - name: Find old reports
       find:
         path: "{{ report_dir }}"
         file_type: file
         patterns: '{{ inventory_hostname }}_*check*'
       register: old_reports
+      when: filename == '1'
 
     - name: Delete old reports
       file:
@@ -78,6 +110,10 @@
         state: absent
       with_items: "{{ old_reports.files }}"
       when: filename == '1'
+
+#    - name: Read in ASI show command file
+#      set_fact: 
+#        showcmds: "{{ lookup('ansible.builtin.file', './commands/asi_commands.txt').split('\n') }}"
 
     - name: Run Show commands
       cli_command:
@@ -92,26 +128,35 @@
 
     - name: Save Output 
       lineinfile:
-        path: "{{ report_dir }}/{{ inventory_hostname }}_{{ results_file }}.txt"
-        line: "{{ item.stdout }}"
+        path: "{{ report_dir }}/{{ inventory_hostname }}_{{results_file}}.txt"
+        line: "{{ item.item }}\n{{ item.stdout }}"
         create: yes
       loop: "{{output.results}}"
+      when: item.stdout is defined
       no_log: True
       ignore_errors: yes
+      delegate_to: localhost
 
     - name: Check for precheck files
       stat:
         path: "{{ report_dir }}/{{ inventory_hostname }}_precheck.txt"
       register: precheck
+      delegate_to: localhost
+
+    - name: Check for postcheck files
+      stat:
+        path: "{{ report_dir }}/{{ inventory_hostname }}_postcheck.txt"
+      register: postcheck
+      delegate_to: localhost
 
 #    - debug:
 #        msg: "{{ output.results|map(attribute='stdout')| list }}"
 
-#    - name: Diff Pre and Post Shows
-#      copy:
-#        src: "{{ report_dir }}/{{ inventory_hostname }}_{{results_file}}.txt"
-#        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.txt"
-#      check_mode: yes
-#      diff: yes
-#      tags: diff
-#      when: precheck.stat.exists
+    - name: Diff Pre and Post Shows
+      copy:
+        src: "{{ report_dir }}/{{ inventory_hostname }}_{{results_file}}.txt"
+        dest: "{{ report_dir }}/{{ inventory_hostname }}_precheck.txt"
+      check_mode: yes
+      diff: yes
+      tags: diff
+      when: precheck.stat.exists and postcheck.stat.exists

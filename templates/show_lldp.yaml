@@ -1,0 +1,6 @@
+---
+- example: "ge-0/0/22   ae0"
+    getval: '(?P<local_interface>\S+)\s+(?P<chassis>\d+)\s+(?P<port>\S+)'
+    result:
+      "{{ local_interface }}":
+         chassis: "{{ chassis }}"

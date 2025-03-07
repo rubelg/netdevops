@@ -1,0 +1,22 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+Prefix Lists for {{ inventory_hostname }}
+---------------------------------
+{% for k,v in json_file.configuration.items() %} 
+
+{% if k == 'policy_options' %}
+{{ v.prefix_list }}
+
+
+{% for n in v.prefix_list %}
+ {% if n.anno is defined %}
+{{ n.anno.comment }}
+{% endif %} 
+{{ n.name }}
+ {% for i in n.prefix_list_item %}
+{{i.name}}
+ {% endfor %}
+ 
+{% endfor %}
+{% endif %}
+{% endfor %}

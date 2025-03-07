@@ -1,0 +1,11 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+BGP Peer report for {{ inventory_hostname }}
+---------------------------------
+{% for item in bgp_data %}
+BGP Peer: {{ item.bgp_data[0].bgp_peer[0].peer_address[0].data }}
+Peer AS: {{ item.bgp_data[0].bgp_peer[0].peer_as[0].data }}
+State: {{ item.bgp_data[0].bgp_peer[0].peer_state[0].data }} 
+
+{% endfor %}
+

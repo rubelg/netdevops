@@ -1,0 +1,38 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+Configuration for {{ inventory_hostname }}
+---------------------------------
+{% for k,v in json_file.configuration.items() -%} 
+  {% if k == 'chassis' %}
+Aggregated Devices: {{ v.aggregated_devices.ethernet.device_count }}
+ 
+ {% if v.fpc is defined %} 
+  {% for n in v.fpc %}
+fpc:  {{ n.name }}
+    {% if n.pic is defined %}
+	  {% for nn in n.pic %}
+  pic:  {{ nn.name }}
+        {% if nn.pic_mode is defined %}
+  pic_mode:  {{ nn.pic_mode }}
+		{% endif %}
+  		{% if nn.port is defined %}
+		  {% for n in nn.port %}
+	port:  {{ n.name }}
+	speed:  {{ n.speed }}
+		  {% endfor %}
+		{% endif %}
+	  {% endfor %}
+	{% endif %}
+  {% endfor %}
+ {% endif %}
+network:  {{ v.network_services }}
+  {% endif %}
+{% endfor -%}
+
+{% for k,v in json_file.configuration.items() %} 
+  {% if k == 'apply_groups' %}
+{{ k }}
+{{ v }}
+  {% endif %}
+{% endfor %}
+  

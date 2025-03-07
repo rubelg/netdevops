@@ -1,0 +1,28 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+Hostname: {{ inventory_hostname }}
+----------------------------------
+{% for item in BGP_IPV4_NEIGHBORS %}
+Neighbor:        {{ item.Peer }}
+ASN:             {{ item.AS }}
+State:           {{ item.State }}
+UpDownTime:      {{ item.Last }} {{ item.UpDwnTime }}
+
+{% endfor %}
+{% for item in BGP_IPV6_NEIGHBORS %}
+Neighbor:        {{ item.Peer }}
+ASN:             {{ item.AS }}
+State:           {{ item.State }}
+UpDownTime       {{ item.Last }} {{ item.UpDwnTime }}
+
+{% endfor %}
+ISIS Adjacency
+----------------------------------
+{% for item in ISIS_NEIGHBORS %}
+Neighbor:        {{ item.Neighbor }}
+Interface:       {{ item.Interface }}
+State:           {{ item.State }}
+Level:           {{ item.Level }}
+Hold:            {{ item.Hold }}
+
+{% endfor %}

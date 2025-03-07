@@ -1,0 +1,20 @@
+---
+vars:
+	bgp_neighbors:
+	  Peer: "{{ item.peer }}"
+	  State: "{{ item.state }}"
+	  Active_prefixes: "{{ item.active_prefixes }}"
+	  Received prefixes: "{{ item.received_prefixes }}"
+	  Accepted prefixes: "{{ item.accepted_prefixes }}"
+	  Advertised prefixes: "{{ item.advertised_prefixes }}"
+	  
+keys:
+    bgp_neighbors:
+	  value: "{{ bgp_neighbors }}"
+	  items:
+	    - '^(?<Peer>\S+)\s+'
+		- '(?P<State>\S+)\s+'
+		- '(?P<Active prefixes>\S+)\s+'
+		- '(?P<Received prefixes>\S+)s+'
+		- '(?P<Accepted prefixes>\S+)s+'
+		- '(?P<Advertised prefixes>\S+)s+'

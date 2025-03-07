@@ -1,0 +1,6 @@
+---
+interfaces:
+{% for item in {{ show_intf }} %}
+show interface {{ item }}
+show itnerface {{ item }} | match flap
+{% endfor %}

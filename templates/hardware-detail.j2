@@ -1,0 +1,68 @@
+#jinja2: lstrip_blocks: "True", trim_blocks: "True"
+
+
+Hardware Inventory for {{ inventory_hostname }}
+---------------------------------
+{% for item in json_file.chassis_inventory %} 
+  {% for cm in item.chassis %}
+  {% for n in cm.name %}
+Name:  {{ n.data }}
+  {% endfor %}
+  {% for d in cm.description %}
+Description: {{ d.data }}
+  {% endfor %}
+  {% for s in cm.serial_number %}
+Serial#: {{ s.data }}
+  {% endfor %}
+  
+    {% for item in cm.chassis_module %}
+	  {% for n in item.name %}
+Name:	  {{ n.data }}
+	  {% endfor %}
+	  {% for des in item.description %}
+  Description:	{{ des.data }}
+      {% endfor %}
+	  {% if item.model_number is defined %}
+	  {% for mod in item.model_number %}
+  Model#:		{{ mod.data }}
+      {% endfor %}
+	  {% endif %}
+	  {% if item.part_number is defined %}
+	  {% for part in item.part_number %}
+  Part#:		{{ part.data }}
+      {% endfor %}
+	  {% endif %}
+	  {% if item.serial_number is defined %}
+	  {% for ser in item.serial_number %}
+  Serial#:		{{ ser.data }}
+      {% endfor %}
+	  {% endif %}
+	  {% if item.chassis_sub_module is defined %}
+        {% for i in item.chassis_sub_module %}
+		
+          {% for n in i.name %}
+  Sub-Module:    {{ n.data }}
+          {% endfor %}
+          {% for d in i.description %}
+    Desc:        {{ d.data }}
+          {% endfor %}
+          {% if i.model_number is defined %}		  
+       	  {% for mod in i.model_number %}
+    Model#:      {{ mod.data }}
+	      {% endfor %}
+		  {% endif %}
+		  {% if i.part_number is defined %}
+		  {% for part in i.part_number %}
+    Part#:       {{ part.data }}
+          {% endfor %}
+		  {% endif %}
+		  {% if i.serial_number is defined %}
+          {% for ser in i.serial_number %}
+    Serial#:     {{ ser.data }}
+	      {% endfor %}
+		  {% endif %}
+		{% endfor %}
+	  {% endif %}
+	{% endfor %}
+  {% endfor %}
+{% endfor %}
